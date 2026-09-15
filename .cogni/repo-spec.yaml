@@ -9,85 +9,38 @@
 
 schema_version: "0.1.4"
 
-node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"
-scope_id: "b44d4394-3147-5787-acab-51546be6a3da"
+node_id: "f66b260b-4633-41e2-8711-b7c1b8449cc1"
+scope_id: "10a91d46-194b-509f-a9b5-ec4d597e9ee2"
 scope_key: "default"
 
 intent:
-  name: node-template
-  # Identity projected to /.well-known/agent.json → the operator gallery reads it
-  # (never hardcodes). Forkers: replace hook/mission/brand with your node's own.
-  #   hook    — punchy ≤6-word gallery card tagline
-  #   mission — 1–3 sentence north-star, surfaced at the top of every agent's
-  #             session cognition (the node's reason to exist)
-  #   brand   — { icon, color }; `icon` is the SINGLE source for the node's mark —
-  #             app header, gallery card, og:image all render it (no hand-edited AppHeader
-  #             JSX). It is POLYMORPHIC: a Lucide icon NAME (PascalCase, e.g. `GitFork`)
-  #             OR a hosted image path (a real logo, e.g. `/MyLogo.png`, from the node's own
-  #             `app/public/`). `color` tints the card wash + monogram fallback.
-  #             Forks: set these two fields; never re-hardcode an icon in AppHeader.
-  hook: "Build from this shared foundation"
-  mission: "The first and most general Cogni template — an ever-improving foundation for a DAO-governed AI service app, carrying working CI/CD, governance, payments, and cognition so each fork builds only its mission, not its plumbing. The seed of a family of category-specific templates to come."
-  brand:
-    icon: "GitFork"
-    color: "#22c55e"
-    # Transitional: gallery still reads `thumbnail` until the operator renders `icon`
-    # directly. /opengraph-image now renders the icon, so the gallery shows it today.
-    thumbnail: "/opengraph-image"
+  name: toks5
+  mission: "Define toks5's one-line mission here — refine in .cogni/repo-spec.yaml (surfaced at session start)."
 
 governance:
-  chain_id: "8453" # Base mainnet
+  dao_contract: "0x34b7c7b56d435fe6092db5d3b9a2e5a1a737b8ac"
+  plugin_contract: "0x86e745f3fff3bc6f310266ff047c10cc68787fde"
+  signal_contract: "0xfc2bd363134d9b76f28c92d9a0b48cef64edf406"
+  token_contract: "0x1fFbcDB461E3fb7dC035547ceD1B20DE23a2E980"
+  chain_id: "8453"
+  base_url: "https://proposal.cognidao.org"
 
-# Activity ledger ingestion + approver allowlist.
-# `approvers` gates the `(admin)/` route group and write routes under
-# `/api/v1/attribution/*`. Replace with the fork's DAO-owner wallet(s) when
-# spinning up a new node from this template.
-activity_ledger:
-  epoch_length_days: 7
-  approvers:
-    - "0x070075F1389Ae1182aBac722B36CA12285d0c949" # derekg1729.eth (template default)
-  activity_sources:
-    github:
-      attribution_pipeline: cogni-v0.0
-      source_refs: ["Cogni-DAO/standalone-node"]
+knowledge:
+  database: "knowledge_toks5"
+  remote:
+    provider: dolthub
+    owner: "cogni-dao"
+    repo: "toks5"
+    url: "https://doltremoteapi.dolthub.com/cogni-dao/toks5"
+    custody: cogni-owned
 
-payments:
-  status: pending_activation
-
-# Outbound payment config — the human-custodied steward wallet that settles vendor
-# invoices (OpenRouter) via manual USDC checkout. The operator wallet funds this one
-# pinned address via withdrawToSteward; a human then completes each vendor checkout.
-# Default = Derek's admin wallet (he admins all current forks). See docs/design/node-steward-wallet.md.
-payments_out:
-  steward_wallet:
-    address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
-
-# Born-reviewable default gates. When this node is minted as a single-node fork
-# (node-at-root, no `nodes:` registry) the operator's review path runs these gates
-# against the repo-root `.cogni/rules/` below. The mint (`renderRepoSpec`) re-emits
-# this same block onto the minted repo's identity spec — keep the two in lockstep.
-# Gate set coordinated with the operator review path (Lane A). Tune per node.
-gates:
-  - type: review-limits
-    id: review_limits
-    with:
-      max_changed_files: 50
-      max_total_diff_kb: 1500
-  - type: ai-rule
-    with:
-      rule_file: pr-syntropy-coherence.yaml
-  - type: ai-rule
-    with:
-      rule_file: patterns-and-docs.yaml
-  - type: ai-rule
-    with:
-      rule_file: repo-goal-alignment.yaml
-
-# Akash lane (story.5016). Declares WHAT this node runs so the operator can
-# render a provider-neutral workload. Emitted verbatim by
-# `renderNodeDeploymentYaml()` in @cogni/repo-spec -- the SAME renderer the node
-# scaffolder mints from and that `assertDeclaredNodeDeployment` prints when a
-# node is missing one. One renderer, no hand-authored drift.
+# App-tier workload this node runs, in the node's own words: services, ports,
+# resources, exactly one `public` service, and the value-free logical secret
+# names its runtime needs. This is provider-neutral — the parent catalog, not
+# this file, decides whether an environment lands on k3s or off-cluster compute.
+# The `cogni-node-app-v1` runtime_profile pins the Cogni Next.js app contract;
+# a service that declares it MUST declare every secret_ref listed below.
+# Add sibling services here (private by default) as this node grows.
 deployment:
   services:
     - name: app
@@ -112,3 +65,44 @@ deployment:
         cpu_units: 2
         memory_mi: 2048
         storage_mi: 4096
+
+# Activity ledger ingestion + approver allowlist.
+# `approvers` gates the `(admin)/` route group and write routes under
+# `/api/v1/attribution/*`. Replace with the fork's DAO-owner wallet(s) when
+# spinning up a new node from this template.
+activity_ledger:
+  epoch_length_days: 7
+  approvers:
+    - "0x070075F1389Ae1182aBac722B36CA12285d0c949" # derekg1729.eth (template default)
+  activity_sources:
+    github:
+      attribution_pipeline: cogni-v0.0
+      source_refs: ["cogni-dao/toks5"]
+
+payments:
+  status: pending_activation
+
+# Token distributions — activate after verifying DAO-controlled minted inventory.
+distributions:
+  status: pending_activation
+
+# Born-reviewable default gates. When this node is minted as a single-node fork
+# (node-at-root, no `nodes:` registry) the operator's review path runs these gates
+# against the repo-root `.cogni/rules/` below. The mint (`renderRepoSpec`) re-emits
+# this same block onto the minted repo's identity spec — keep the two in lockstep.
+# Gate set coordinated with the operator review path (Lane A). Tune per node.
+gates:
+  - type: review-limits
+    id: review_limits
+    with:
+      max_changed_files: 50
+      max_total_diff_kb: 1500
+  - type: ai-rule
+    with:
+      rule_file: pr-syntropy-coherence.yaml
+  - type: ai-rule
+    with:
+      rule_file: patterns-and-docs.yaml
+  - type: ai-rule
+    with:
+      rule_file: repo-goal-alignment.yaml
