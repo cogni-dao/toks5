@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-03-05
+- **Last reviewed:** 2026-09-15
 - **Status:** draft
 
 ## Purpose
@@ -56,6 +56,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/attribution/epochs/[id]/claimants` [GET] - claimant-aware finalized attribution (SIWE auth)
   - `/api/v1/attribution/epochs/[id]/user-projections` [GET, PATCH=410] - read per-user unsigned projections; edits are deprecated
   - `/api/v1/attribution/epochs/[id]/review-subject-overrides` [GET, PATCH, DELETE] - review-time subject overrides (SIWE + approver)
+  - `/api/v1/attribution/settlement-lifecycle` [GET] - settlement and chain-proven publication lifecycle (SIWE auth)
   - `/api/v1/attribution/epochs/[id]/pool-components` [POST] - record pool component (SIWE + approver)
   - `/api/v1/users/me` [GET, PATCH] - current profile
   - `/api/v1/users/me/ownership` [GET] - current ownership summary derived from linked identities
@@ -64,6 +65,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
+  - `/api/v1/ai/runs/[runId]/ui-stream` [GET] - session-authenticated AI SDK chat replay stream
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 
 ## Responsibilities
