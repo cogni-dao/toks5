@@ -677,14 +677,11 @@ function createContainer(): Container {
 	// RepoCapability for AI tools (requires COGNI_REPO_PATH)
 	const repoCapability = createRepoCapability(env);
 
-	// WorkItemCapability for AI tools (delegates to markdown adapter ports)
+	// Legacy markdown work-item adapter (container.workItemQuery + the AI tool's
+	// command path). The runtime image carries no `work/` tree, so it reads empty.
 	const workItemAdapter = new MarkdownWorkItemAdapter(
 		env.COGNI_REPO_ROOT ?? "/nonexistent",
 	);
-	const workItemCapability = createWorkItemCapability({
-		workItemQuery: workItemAdapter,
-		workItemCommand: workItemAdapter,
-	});
 
 	// ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)
 	const scheduleCapability = createScheduleCapability({
@@ -730,7 +727,18 @@ function createContainer(): Container {
 			sql: doltClient,
 		});
 		knowledgeStorePort = knowledgePort;
-		knowledgeCapability = createKnowledgeCapability(knowledgePort);
+		knowledgeCapability = {
+			...createKnowledgeCapability(knowledgePort),
+			// ONE_GOAL_LIST (dao-goals-design): the store's goal reader, for core__goal_list.
+			// TooManyActiveGoalsError keeps its `code`; the tool maps it to too_many_active_goals.
+			listActiveGoals: async () =>
+				(await knowledgePort.listActiveGoals()).map((g) => ({
+					id: g.id,
+					title: g.title,
+					content: g.content,
+					evaluateAt: g.evaluateAt ? g.evaluateAt.toISOString() : null,
+				})),
+		};
 		const edoResolver = new DoltgresEdoResolverAdapter({
 			sql: doltClient,
 			store: knowledgePort,
@@ -786,6 +794,7 @@ function createContainer(): Container {
 			list: notConfigured,
 			get: notConfigured,
 			write: notConfigured,
+			listActiveGoals: notConfigured,
 		};
 		edoCapability = {
 			hypothesize: notConfigured,
@@ -810,6 +819,16 @@ function createContainer(): Container {
 		};
 		log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
 	}
+
+	// WorkItemCapability for AI tools (task.5282 / story.5101). `core__work_item_query`
+	// lists through the Doltgres read path — the same `doltgresWorkItems.list` that
+	// `GET /api/v1/work/items` serves. The command path (transition/patch) stays on the
+	// markdown ports: rebinding reads does not widen writes.
+	const workItemCapability = createWorkItemCapability({
+		workItemQuery: workItemAdapter,
+		workItemCommand: workItemAdapter,
+		backlogReader: doltgresWorkItems,
+	});
 
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
 	const toolBindings = createToolBindings({

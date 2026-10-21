@@ -12,6 +12,8 @@
  *   - NODE_BUNDLE_IS_CANONICAL: Resolves BoundTool from injected node bundle (CORE_TOOL_BUNDLE [+ POLY_TOOL_BUNDLE for poly]); never iterates the global TOOL_CATALOG (which is per-package and can drift behind per-node bundles).
  *   - DENY_BY_DEFAULT: Tool policy explicitly provided per graph
  *   - MCP_VIA_ASYNC_SOURCE: MCP tools resolved via async getMcpToolSource() function (shared cache with reconnect-on-error)
+ *   - PRIORITIZER_CYCLE_EVENT (story.5101): a work-prioritizer run's structured telemetry is logged as one
+ *     `ai.work_prioritizer.cycle` event (+ judge samples); graphs have no logger.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
  * Notes: Discovery is in LangGraphInProcAgentCatalogProvider, not here.
  * Links: GRAPH_EXECUTION.md, LANGGRAPH_AI.md
@@ -34,6 +36,10 @@ import {
   LANGGRAPH_CATALOG,
   type ToolExecFn,
 } from "@cogni/langgraph-graphs";
+import {
+  type PrioritizerCycleTelemetry,
+  WORK_PRIORITIZER_GRAPH_NAME,
+} from "@cogni/langgraph-graphs/graphs";
 import { trace } from "@opentelemetry/api";
 import type { Logger } from "pino";
 import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
@@ -278,7 +284,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         configurable: { model, toolIds },
       };
 
-      return createInProcGraphRunner({
+      const runner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
         completionFn,
         createToolExecFn,
@@ -292,6 +298,27 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           systemPrompt: entry.systemPrompt,
         }),
       });
+      // Graph-owned cycle summary → one registry event (graphs have no logger).
+      if (graphName === WORK_PRIORITIZER_GRAPH_NAME) {
+        void runner.final
+          .then((result) => {
+            const fields = prioritizerCycleLogFields(
+              runId,
+              result.structuredOutput
+            );
+            if (fields) this.log.info(fields, "work-prioritizer cycle");
+            for (const sample of prioritizerJudgeSampleLogFields(
+              runId,
+              result.structuredOutput
+            )) {
+              this.log.info(sample, "work-prioritizer judge sample");
+            }
+          })
+          .catch(() => {
+            // Run failure is already logged by the inproc error path.
+          });
+      }
+      return runner;
     };
 
     // Execute: resolve MCP (if needed) then run graph.
@@ -453,4 +480,41 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }),
     };
   }
+}
+
+/**
+ * One `ai.work_prioritizer.judge_sample` event per judge batch: the first raw judge lines (≤3 × 400
+ * chars, item text only — no secrets) and the parse counts, so a lost field is visible in Loki.
+ */
+export function prioritizerJudgeSampleLogFields(
+  runId: string,
+  structuredOutput: Record<string, unknown> | undefined
+): Record<string, unknown>[] {
+  const samples = structuredOutput?.judgeSamples;
+  if (!Array.isArray(samples)) return [];
+  return samples.slice(0, 10).map((sample, batch) => ({
+    event: EVENT_NAMES.AI_WORK_PRIORITIZER_JUDGE_SAMPLE,
+    runId,
+    batch,
+    ...(sample as Record<string, unknown>),
+  }));
+}
+
+/**
+ * Fields for the `ai.work_prioritizer.cycle` event from a work-prioritizer run's
+ * structured output, or null when the output carries no telemetry.
+ */
+export function prioritizerCycleLogFields(
+  runId: string,
+  structuredOutput: Record<string, unknown> | undefined
+): Record<string, unknown> | null {
+  const telemetry = structuredOutput?.telemetry as
+    | PrioritizerCycleTelemetry
+    | undefined;
+  if (!telemetry || typeof telemetry.status !== "string") return null;
+  return {
+    event: EVENT_NAMES.AI_WORK_PRIORITIZER_CYCLE,
+    runId,
+    ...telemetry,
+  };
 }

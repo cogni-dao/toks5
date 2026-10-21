@@ -12,6 +12,7 @@
  */
 
 export type {
+  ActiveGoalInfo,
   AuthCapability,
   ChainDirection,
   ChainNodeEntry,
@@ -64,6 +65,7 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemQueryPage,
   WorkItemQueryParams,
   WorkItemTransitionResult,
 } from "./capabilities";
@@ -147,6 +149,18 @@ export {
   getCurrentTimeContract,
   getCurrentTimeImplementation,
 } from "./tools/get-current-time";
+export {
+  createGoalListImplementation,
+  GOAL_LIST_NAME,
+  type GoalListDeps,
+  type GoalListInput,
+  GoalListInputSchema,
+  type GoalListOutput,
+  GoalListOutputSchema,
+  goalListBoundTool,
+  goalListContract,
+  goalListStubImplementation,
+} from "./tools/goal-list";
 export {
   createKnowledgeReadImplementation,
   KNOWLEDGE_READ_NAME,
