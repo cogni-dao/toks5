@@ -18,6 +18,7 @@ export const tsupConfig = defineConfig({
     "src/index.ts",
     "src/refs.ts",
     "src/scheduling.ts",
+    "src/work-item-leases.ts",
     "src/auth.ts",
     "src/billing.ts",
     "src/ai.ts",
