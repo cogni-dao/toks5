@@ -41,9 +41,11 @@ export {
   extractReviewConfig,
   extractScopeId,
   extractStewardWalletConfig,
+  extractWorkPrioritizationPolicy,
   type GatesConfig,
   type GovernanceConfig,
   type GovernanceSchedule,
+  type GovernanceSchedulePayload,
   type InboundPaymentConfig,
   type KnowledgeConfig,
   type LedgerConfig,
@@ -53,6 +55,7 @@ export {
   type OwningNode,
   type ReviewConfig,
   resolveRulePath,
+  type WorkPrioritizationPolicy,
 } from "./accessors.js";
 export {
   type BuiltNodeArtifact,
@@ -131,4 +134,6 @@ export {
   successCriteriaSchema,
   type ThresholdCriterion,
   thresholdCriterionSchema,
+  type WorkPrioritizationSpec,
+  workPrioritizationSpecSchema,
 } from "./schema.js";

@@ -24,6 +24,32 @@ governance:
   token_contract: "0x1fFbcDB461E3fb7dC035547ceD1B20DE23a2E980"
   chain_id: "8453"
   base_url: "https://proposal.cognidao.org"
+  # Governance charters (story.5101). LEDGER_INGEST is NOT declared here on purpose:
+  # extractGovernanceConfig still synthesizes it from activity_ledger (cron 0 0 * * *),
+  # exactly as before this list existed — only a declared LEDGER_INGEST suppresses that.
+  schedules:
+    # Work prioritizer (story.5096 / story.5101), PROPOSE mode: judges + ranks the backlog against
+    # the hub's active goal-* atoms (core__goal_list) and files an EDO decision only when the plan
+    # changes (plus one daily full review). Zero work-item mutations. Model = LiteLLM default_free
+    # (gpt-oss-120b, is_free: true): the system tenant that bills governance runs holds zero credits,
+    # and the preflight credit gate passes free models. Hourly is the prod-safe cadence.
+    - charter: WORK_PRIORITIZER
+      cron: "0 * * * *"
+      timezone: UTC
+      entrypoint: PRIORITIZE
+      graph: langgraph:work-prioritizer
+      model: gpt-oss-120b
+      policy: work_prioritization
+
+# Work-prioritization policy (story.5096). Node-owned and versioned; changing it is a reviewed PR.
+# Goals are not listed here: the prioritizer reads the hub's active goal-* atoms (dao-goals-design),
+# and there are no capacity caps. The graph is propose-only: every env proposes.
+work_prioritization:
+  policy_version: v5.0
+  apply:
+    # Per deploy environment (DEPLOY_ENVIRONMENT). Propose everywhere until a write path exists.
+    mode:
+      default: propose
 
 knowledge:
   database: "knowledge_toks5"
