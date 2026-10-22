@@ -350,7 +350,7 @@ export async function handleMerge(
       contributionId,
       actor: {
         userId: sessionUser.id,
-        walletAddress: sessionUser.walletAddress,
+        walletAddress: sessionUser.walletAddress ?? null,
       },
       ...(parsed.data.confidencePct != null
         ? { confidencePct: parsed.data.confidencePct }
@@ -358,6 +358,19 @@ export async function handleMerge(
     });
     return NextResponse.json({ contributionId, ...result });
   } catch (e) {
+    if (e instanceof NodeAdminRequiredError) {
+      // Server-side only: the raw authority reason never reaches the client body.
+      getContainer().log.warn(
+        {
+          errorCode: e.errorCode,
+          reason: e.reason,
+          action: e.action,
+          contributionId,
+          userId: sessionUser.id,
+        },
+        "knowledge.contributions.merge_node_admin_refused"
+      );
+    }
     return mapError(e);
   }
 }
