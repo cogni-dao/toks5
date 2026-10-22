@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@cogni/ai-core": "workspace:*",
-    "@cogni/ai-tools": "workspace:*",
+    "@cogni/ai-tools": "https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.1.0-rc.1/cogni-dao-ai-tools-0.1.0-rc.1.tgz",
     "@cogni/aragon-osx": "workspace:*",
     "@cogni/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.3.5/cogni-dao-knowledge-store-0.3.5.tgz",
     "@cogni/node-core": "workspace:*",

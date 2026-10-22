@@ -9,6 +9,10 @@
  *   - SINGLE_WRITER: pg_advisory_lock on a reserved (pinned) pool connection prevents concurrent sync runs
  *   - GRANT_VIA_PORT: Uses ensureGrant on ExecutionGrantUserPort, no raw SQL
  *   - SYSTEM_PRINCIPAL: Grant created for COGNI_SYSTEM_PRINCIPAL_USER_ID
+ *   - GRAPH_CHARTER (story.5101): a charter declaring `graph` runs on its own `graph:execute:{graphId}`
+ *     grant; the sandbox governance grant and LEDGER_INGEST are untouched.
+ *   - APPLY_MODE_BY_ENV: the work-prioritization payload's applyMode is resolved here from
+ *     DEPLOY_ENVIRONMENT; the graph never reads env.
  * Side-effects: IO (database advisory lock, Temporal RPC, grant creation)
  * Links: packages/scheduler-core/src/services/syncGovernanceSchedules.ts, docs/spec/governance-scheduling.md
  * @public
@@ -83,7 +87,10 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
   }
 
   try {
-    const config = getGovernanceConfig();
+    const config = withEnvApplyMode(
+      getGovernanceConfig(),
+      serverEnv().DEPLOY_ENVIRONMENT
+    );
     const systemUserId = toUserId(COGNI_SYSTEM_PRINCIPAL_USER_ID);
 
     const result = await syncGovernanceSchedules(config, {
@@ -94,6 +101,25 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
           scopes: GOVERNANCE_GRANT_SCOPES,
         });
         return grant.id;
+      },
+      // GRAPH_CHARTER: a charter that declares `graph` runs on its own
+      // `graph:execute:{graphId}` grant, so the sandbox governance grant (and the
+      // LEDGER_INGEST schedule that shares it) is untouched.
+      ensureGraphGrant: async (graphId: string) => {
+        const grant = await container.executionGrantPort.ensureGrant({
+          userId: systemUserId,
+          billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+          scopes: [`graph:execute:${graphId}`],
+        });
+        return grant.id;
+      },
+      // GRAPH_CRON_DRIFT: next fire time of a cron, minute precision, for drift detection.
+      nextCronRun: (cron: string, timezone: string) => {
+        try {
+          return computeNextRun(cron, timezone).toISOString();
+        } catch {
+          return null;
+        }
       },
       upsertGovernanceScheduleRow: async (params) => {
         const nextRunAt = computeNextRun(params.cron, params.timezone);
@@ -212,4 +238,30 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
     await reservedConn`SELECT pg_advisory_unlock(hashtext('governance_sync'))`;
     reservedConn.release();
   }
+}
+
+/**
+ * APPLY_MODE_BY_ENV (story.5096 design v4 §1): resolve the work-prioritization payload's
+ * `applyMode` for THIS deployment (`apply.mode[<DEPLOY_ENVIRONMENT>]`, else `default`). The
+ * env name is read here at the bootstrap seam; the graph never reads env.
+ */
+export function withEnvApplyMode(
+  config: ReturnType<typeof getGovernanceConfig>,
+  deployEnvironment: string | undefined
+): ReturnType<typeof getGovernanceConfig> {
+  return {
+    ...config,
+    schedules: config.schedules.map((s) => {
+      const wp = s.payload?.workPrioritization;
+      if (!wp) return s;
+      const applyMode =
+        (deployEnvironment && wp.applyModes[deployEnvironment]) ||
+        wp.applyModes.default ||
+        "propose";
+      return {
+        ...s,
+        payload: { ...s.payload, workPrioritization: { ...wp, applyMode } },
+      };
+    }),
+  };
 }

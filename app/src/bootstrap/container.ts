@@ -141,6 +141,7 @@ import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
+import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import type {
@@ -328,6 +329,8 @@ let _workflowClientPromise: Promise<{
 export function getContainer(): Container {
 	if (!_container) {
 		_container = createContainer();
+		// SELF_RECONCILE_ON_BOOT: activate repo-spec governance schedules (WORK_PRIORITIZER).
+		startGovernanceSyncOnBoot();
 	}
 	return _container;
 }
