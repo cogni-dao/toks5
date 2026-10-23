@@ -8,6 +8,7 @@
  * Invariants:
  *   - PORTS_ARE_AUTHORITY: All operations delegate to WorkItemQueryPort/WorkItemCommandPort
  *   - TRANSITION_TABLE_ENFORCED: CommandPort validates transitions
+ *   - PRIORITY_USES_EXISTING_AUTHORITY: Priority patches delegate without an extra node-admin gate.
  * Side-effects: none (factory only)
  * Links: docs/spec/development-lifecycle.md
  * @internal
@@ -28,8 +29,6 @@ import type {
   WorkItemType,
 } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
-
-import { isPrivilegedPriority } from "@cogni/knowledge-store";
 
 /**
  * Dependencies for creating the work item capability.
@@ -126,15 +125,6 @@ export function createWorkItemCapability(
     },
 
     async patch(input): Promise<WorkItemInfo> {
-      // P0P1_IS_NODE_ADMIN (story.5101): node admin is a wallet-bearing human
-      // session (the container's `nodeAdmin`); a tool invocation carries no
-      // wallet, so an AI patch to priority <= 1 is refused before any write.
-      const priority = input.set.priority;
-      if (priority != null && isPrivilegedPriority(priority)) {
-        throw new Error(
-          `authz_denied: priority ${priority} requires node admin — propose it instead`
-        );
-      }
       const current = await workItemQuery.get(toWorkItemId(input.id));
       if (!current) {
         throw new Error(`Work item not found: ${input.id}`);

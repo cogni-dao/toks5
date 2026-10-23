@@ -3,10 +3,9 @@
 
 /**
  * Module: `@tests/unit/bootstrap/work-item-capability`
- * Purpose: The AI work-item capability queries the live (Doltgres) backlog when wired, and refuses AI patches
- *   to priority <= 1.
+ * Purpose: The AI work-item capability queries the live backlog and delegates priority patches to its existing port.
  * Scope: Factory with fake ports. No Doltgres.
- * Invariants: QUERY_READS_THE_LIVE_BACKLOG, WRITES_NOT_WIDENED, P0P1_IS_NODE_ADMIN.
+ * Invariants: QUERY_READS_THE_LIVE_BACKLOG, WRITES_NOT_WIDENED, PATCH_CAS_PRESERVED.
  * Side-effects: none
  * Links: src/bootstrap/capabilities/work-item.ts, story.5101
  * @internal
@@ -48,23 +47,42 @@ describe("createWorkItemCapability", () => {
     });
   });
 
-  it("an AI patch to priority <= 1 is refused before any write", async () => {
-    const command = { patch: vi.fn() };
+  it.each([
+    0, 1,
+  ])("an AI priority %i patch delegates with the current revision", async (priority) => {
+    const item = {
+      id: "task.5001",
+      type: "task",
+      title: "t",
+      status: "needs_implement",
+      revision: 3,
+      labels: [],
+      assignees: [],
+    };
+    const command = { patch: vi.fn().mockResolvedValue({ ...item, priority }) };
     const cap = createWorkItemCapability({
-      workItemQuery: { list: vi.fn(), get: vi.fn() } as unknown as WorkItemQueryPort,
+      workItemQuery: {
+        list: vi.fn(),
+        get: vi.fn().mockResolvedValue(item),
+      } as unknown as WorkItemQueryPort,
       workItemCommand: command as unknown as WorkItemCommandPort,
     });
-    await expect(cap.patch({ id: "task.5001", set: { priority: 0 } })).rejects.toThrow(
-      "authz_denied"
-    );
-    expect(command.patch).not.toHaveBeenCalled();
+    const result = await cap.patch({ id: "task.5001", set: { priority } });
+    expect(result.priority).toBe(priority);
+    expect(command.patch).toHaveBeenCalledWith({
+      id: "task.5001",
+      expectedRevision: "3",
+      set: { priority },
+    });
   });
 
   it("WRITES_NOT_WIDENED: transitionStatus/patch stay on workItemQuery + workItemCommand, never the backlogReader", async () => {
     const item = { id: "task.5001", status: "needs_implement", revision: 3 };
     const markdown = { list: vi.fn(), get: vi.fn().mockResolvedValue(item) };
     const command = {
-      transitionStatus: vi.fn().mockResolvedValue({ ...item, status: "done", revision: 4 }),
+      transitionStatus: vi
+        .fn()
+        .mockResolvedValue({ ...item, status: "done", revision: 4 }),
       patch: vi.fn().mockResolvedValue({
         ...item,
         type: "task",

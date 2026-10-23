@@ -4,8 +4,8 @@
 /**
  * Module: `@tests/unit/facades/work-items`
  * Purpose: Unit test for work items facade — verifies DTO mapping and port delegation.
- * Scope: Mocks container and WorkItemQueryPort. Tests listWorkItems and getWorkItem.
- * Invariants: PORT_VIA_CONTAINER, CONTRACTS_ARE_TRUTH
+ * Scope: Mocks container and ports. Tests reads and priority writes under existing store authority.
+ * Invariants: PORT_VIA_CONTAINER, CONTRACTS_ARE_TRUTH, STORE_AUTHORITY_PRESERVED
  * Side-effects: none
  * Links: src/app/_facades/work/items.server.ts
  * @internal
@@ -28,8 +28,8 @@ import {
   createWorkItem,
   getWorkItem,
   listWorkItems,
-  NodeAdminRequiredError,
   patchWorkItem,
+  WorkItemForbiddenError,
 } from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
@@ -265,57 +265,64 @@ describe("app/_facades/work/items.server", () => {
   });
 });
 
-describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", () => {
-  const doltgres = () => ({
-    create: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM),
-    patch: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM),
-  });
-  const withAuthority = (ok: boolean) => {
-    const store = doltgres();
+describe("priority writes preserve existing store authority", () => {
+  const withStore = (priority: number) => {
+    const store = {
+      create: vi.fn().mockResolvedValue({ ...SAMPLE_WORK_ITEM, priority }),
+      patch: vi.fn().mockResolvedValue({ ...SAMPLE_WORK_ITEM, priority }),
+    };
+    const check = vi
+      .fn()
+      .mockRejectedValue(new Error("node admin unavailable"));
     mockGetContainer.mockReturnValue({
       doltgresWorkItems: store,
       log: { warn: vi.fn() },
-      nodeAdmin: {
-        check: async () =>
-          ok ? { ok: true } : { ok: false, errorCode: "authz_denied" },
-      },
+      nodeAdmin: { check },
     } as never);
-    return store;
+    return { store, check };
   };
 
-  it("a non-admin patch to p0 (or p1) is refused 403 before the store write", async () => {
-    for (const priority of [0, 1]) {
-      const store = withAuthority(false);
-      const err = await patchWorkItem(
-        { id: "task.5001", set: { priority } } as never,
-        { id: "agent-1", walletAddress: null }
-      ).catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(NodeAdminRequiredError);
-      expect((err as NodeAdminRequiredError).status).toBe(403);
-      expect(store.patch).not.toHaveBeenCalled();
-    }
+  it.each([
+    0, 1,
+  ])("an agent patches priority %i without consulting node admin", async (priority) => {
+    const { store, check } = withStore(priority);
+    const result = await patchWorkItem(
+      { id: "task.0001", set: { priority } } as never,
+      { id: "agent-1", walletAddress: null }
+    );
+    expect(result.priority).toBe(priority);
+    expect(store.patch).toHaveBeenCalledWith(
+      { id: "task.0001", set: { priority } },
+      "agent-1"
+    );
+    expect(check).not.toHaveBeenCalled();
   });
 
-  it("a non-admin create at p1 is refused; p2 is open", async () => {
-    const store = withAuthority(false);
+  it.each([
+    0, 1,
+  ])("an agent creates priority %i without consulting node admin", async (priority) => {
+    const { store, check } = withStore(priority);
+    const input = { type: "task", title: "t", priority } as const;
+    const result = await createWorkItem(input, { id: "agent-1" });
+    expect(result.priority).toBe(priority);
+    expect(store.create).toHaveBeenCalledWith(input, "agent-1");
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("still surfaces the store's creator-authority refusal for a priority patch", async () => {
+    const { store, check } = withStore(0);
+    store.patch.mockRejectedValue(
+      Object.assign(new Error("not creator"), {
+        name: "WorkItemAuthorizationError",
+        id: "task.0001",
+      })
+    );
     await expect(
-      createWorkItem({ type: "task", title: "t", priority: 1 } as never, {
+      patchWorkItem({ id: "task.0001", set: { priority: 0 } } as never, {
         id: "agent-1",
       })
-    ).rejects.toBeInstanceOf(NodeAdminRequiredError);
-    expect(store.create).not.toHaveBeenCalled();
-    await createWorkItem({ type: "task", title: "t", priority: 2 } as never, {
-      id: "agent-1",
-    });
-    expect(store.create).toHaveBeenCalledTimes(1);
-  });
-
-  it("the node admin may set p0", async () => {
-    const store = withAuthority(true);
-    await patchWorkItem({ id: "task.5001", set: { priority: 0 } } as never, {
-      id: "u1",
-      walletAddress: "0xabc",
-    });
+    ).rejects.toBeInstanceOf(WorkItemForbiddenError);
     expect(store.patch).toHaveBeenCalledTimes(1);
+    expect(check).not.toHaveBeenCalled();
   });
 });
