@@ -225,6 +225,13 @@
       "when": 1787904609192,
       "tag": "0031_illegal_ben_urich",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792562753013,
+      "tag": "0032_tearful_menace",
+      "breakpoints": true
     }
   ]
 }
