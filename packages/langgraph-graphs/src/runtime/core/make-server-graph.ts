@@ -16,7 +16,7 @@
  * @public
  */
 
-import { type CatalogBoundTool, TOOL_CATALOG } from "@cogni/ai-tools";
+import { type CatalogBoundTool, TOOL_CATALOG } from "@cogni/toks5-ai-tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { initChatModel } from "langchain/chat_models/universal";
 

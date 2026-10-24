@@ -19,6 +19,8 @@
 
 "use client";
 
+import { rankScore } from "@cogni/work-items";
+import { Button } from "@/components";
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
 
@@ -34,6 +36,25 @@ const formatStatus = (v: string) =>
 const formatProject = (v: string) => v.replace("proj.", "");
 
 export const columns = [
+  col.accessor((item) => rankScore(item.scores), {
+    id: "rankScore",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() =>
+          column.toggleSorting(column.getIsSorted() === "desc" ? false : true)
+        }
+      >
+        Rank
+      </Button>
+    ),
+    sortDescFirst: true,
+    sortUndefined: "last",
+    size: 70,
+    cell: (info) => info.getValue()?.toFixed(2) ?? "—",
+    meta: { headerTitle: "Rank" },
+  }),
   col.accessor("priority", {
     header: ({ column }) => (
       <DataGridColumnHeader column={column} title="Pri" />
