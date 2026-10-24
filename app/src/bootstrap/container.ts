@@ -71,6 +71,7 @@ import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
 import type { WorkItemQueryPort } from "@cogni/work-items";
+import { DoltgresWorkItemAdapter as LegacyWorkItemAdapter } from "@cogni/work-items-legacy/adapters/doltgres";
 import { DoltgresWorkItemAdapter } from "@cogni/work-items/adapters/doltgres";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import {
@@ -97,6 +98,7 @@ import {
 	GITHUB_ADAPTER_VERSION,
 	GitHubWebhookNormalizer,
 	getAppDb,
+	getExecutionScope,
 	LangfuseAdapter,
 	LiteLlmAdapter,
 	type MimirAdapterConfig,
@@ -139,6 +141,7 @@ import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
+import { composeWorkItemContent } from "@/bootstrap/capabilities/work-item-composition";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
@@ -691,7 +694,21 @@ function createContainer(): Container {
 		// QUERY_READS_THE_LIVE_BACKLOG: the AI query tool (and the prioritizer) reads
 		// this node's Doltgres work items; `doltgresWorkItems` is assigned below and
 		// read only at call time.
-		backlogReader: { list: (query) => doltgresWorkItems.list(query) },
+		backlogReader: {
+			get: (id) => doltgresWorkItems.get(id),
+			list: (query) => doltgresWorkItems.list(query),
+		},
+		backlogWriter: {
+			patch: (input, principal) => doltgresWorkItems.patch(input, principal),
+			principalId: () => {
+				const actor = getExecutionScope().actorUserId;
+				if (!actor)
+					throw new Error(
+						"Work item writer requires an authenticated run actor"
+					);
+				return actor;
+			},
+		},
 	});
 
 	// ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)
@@ -728,13 +745,31 @@ function createContainer(): Container {
 				applicationName: `cogni_work_items_${env.SERVICE_NAME ?? "app"}`,
 				max: 1,
 			});
-		const workItemsClient = createWorkItemsClient();
-		// Node stores start their allocator at 1; operator alone reserves the
-		// imported legacy range below 5000.
-		doltgresWorkItems = new DoltgresWorkItemAdapter(workItemsClient, {
+		const createLegacyClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_work_items_v1_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
+		const createReadClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_work_items_read_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
+		const content = new DoltgresWorkItemAdapter(createWorkItemsClient(), {
 			logger: log,
 			recreateClient: createWorkItemsClient,
+			writerLockProtocol: "bridge",
+			readClient: createReadClient(),
+			recreateReadClient: createReadClient,
+			readConnectionBudget: 2,
 		});
+		const legacy = new LegacyWorkItemAdapter(createLegacyClient(), {
+			logger: log,
+			recreateClient: createLegacyClient,
+		});
+		doltgresWorkItems = composeWorkItemContent(content, legacy);
 		const knowledgePort = new DoltgresKnowledgeStoreAdapter({
 			sql: doltClient,
 		});
@@ -823,6 +858,7 @@ function createContainer(): Container {
 
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
 	const toolBindings = createToolBindings({
+		nodePublicOrigin: env.APP_BASE_URL,
 		knowledgeCapability,
 		edoCapability,
 		metricsCapability,

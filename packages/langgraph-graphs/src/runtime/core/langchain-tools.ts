@@ -17,7 +17,7 @@
  */
 
 import type { ToolExecFn } from "@cogni/ai-core";
-import type { ToolContract } from "@cogni/ai-tools";
+import type { ToolContract } from "@cogni/toks5-ai-tools";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
   DynamicStructuredTool,

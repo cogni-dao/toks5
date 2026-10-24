@@ -60,3 +60,5 @@ Capability factories bridging ai-tools interfaces to adapters. Creates environme
 ## Notes
 
 - Pattern: test mode uses fake adapter, prod requires env vars or returns stub
+
+- Work-item evaluation uses principal-bound live content writes; v1 leases/DELETE stay on an exact legacy adapter, projecting only claim fields.
