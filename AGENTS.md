@@ -1,71 +1,56 @@
-# AGENTS.md — Cogni node session floor
+# AGENTS.md — Cogni bootstrap floor
 
-## Non-negotiable execution wrapper
+The complete session agent-contract, including the exact response format and all
+communication semantics, lives in this node's cognition bundle (`## The agent-contract`),
+served from `/api/v1/cognition`. Follow that loaded contract for normal work. This file
+owns bootstrap, local execution safety, and recovery only; it does not define a second
+response format.
 
-Every user task executes through the session agent-contract; satisfying the task while
-breaching this wrapper makes the work invalid.
+## Native delivery
 
-1. Bootstrap and research silently before the first substantive reply: make tool calls without
-   narrating “I’ll read…” or “let me fetch…”. Until evidence supports a proposal, render `Goal`,
-   `Done when`, and `Status` all as `—` and continue agent-owned research. Any necessary interim
-   update still uses the complete status block. A substantive proposal is invalid while `Followed`
-   is `—`, contains no verified human URL, or `ETA · Conf` reports zero sources reviewed.
-2. Every human-facing reply, including answers and follow-ups, is exactly this skeleton
-   and contains no prose before, between, or after it:
+The gitignored `.cogni/.cognition-cache.md` is a last-known complete bundle. The shared
+loader (`scripts/agent/session-cognition.sh`) validates contract completeness before
+admitting a refresh. An unavailable hub or incomplete response preserves a complete
+cache, so a warm session can work offline.
 
-   | 🎯 **Goal**    | <12 words or —>                              |
-   | -------------- | -------------------------------------------- |
-   | **Done when**  | <measurable final behavior or —>             |
-   | **Status**     | <symbol + at most 6 words or —>              |
-   | **ETA · Conf** | <time> · <earned percent + sources reviewed> |
-   | **Followed**   | <verified human URLs>                        |
+The contract must already be model-visible before normal work: Claude imports the cache
+through `CLAUDE.md`; Codex receives uncapped SessionStart context; supported OpenCode 1.x
+loads it through `opencode.json.instructions`. Do not manually read the cache merely to
+bootstrap; a missing native import is a delivery failure.
 
-   ***
+## Recovery when no complete contract is loaded
 
-   | item                                 | owner                              | deliverable links | status          | next             |
-   | ------------------------------------ | ---------------------------------- | ----------------- | --------------- | ---------------- |
-   | <linked work item or proposed story> | <dev-manager, me OR subagent name> | <links or ->      | <shared status> | <ownership gate> |
+Stay in bounded bootstrap recovery; do not start normal task work or treat AGENTS.md,
+skills, a map-only bundle, or a recovery notice as a replacement contract. Limit activity
+to diagnosing delivery, recovering this node's credentials, and warming a complete bundle.
+Run the shared loader from the repository root once and inspect the setup result. If it
+still cannot load a complete contract, report the missing delivery evidence and the
+specific setup action needed; do not repeatedly fetch or invent a fallback format.
+Do not offer to waive the missing contract or ask the human to authorize normal work
+without it. Recovery ends only when the native instruction path loads a complete bundle.
 
-   > <symbol> **Bottom line —** <at most 20 words>
+On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_API_KEY in
+the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
+Workspace setup warms the cache before the first agent starts. Claude resolves its
+imports before the SessionStart fetch can finish: after recovery warms the cache,
+restart or resume so the native instruction path loads it before normal work begins.
+The loader may cache a recovery notice for the next import; that notice is never a
+complete contract.
 
-   `owner` is exactly `dev-manager, me` or `subagent <name>`. `next` is exactly an
-   agent-owned action, `👉 needs you: <decision link>`, `👀 <watch link>`, or `-`.
+## Local execution safety
 
-   `Followed` is the complete evidence ledger, not highlights. Cite the material sources actually
-   used in this order: orientation → skills/guides → hub knowledge → designs/code → work items →
-   external sources. Convert a local repo path into its human GitHub blob URL at the current SHA;
-   “local” is never a reason to omit it. The reviewed-source count cannot exceed distinct URLs.
+Heavy local commands default to NO. `pnpm check`, `pnpm check:fast` (and `:fix`),
+`pnpm dev`, and the unfiltered `pnpm test` suite require the human's explicit request
+and consent this session. Lightweight targeted checks run freely: Biome / `pnpm lint`
+on touched paths, `pnpm typecheck`, and at most 1–2 specific test files. Default proof
+is CI plus flight.
 
-3. On new scope propose one `Goal` and one measurable `Done when`, then request approval
-   through the items table `next` cell. Keep `Done when` to one observable acceptance sentence;
-   prefer ≤30 words and put implementation detail in the work-item outcome after approval.
-4. Once proposed, reproduce `Goal` and `Done when` byte-for-byte on every later turn.
-   Discussion, risks, questions, or progress never reopen them. A potential pivot goes only
-   in `Status`, `next`, and `Bottom line`; change neither field until the human explicitly
-   approves the pivot.
-5. Continue agent-owned work without asking permission. Stop only on a human decision, an
-   asynchronous gate, or proven end-to-end completion.
+Work against exactly one node and work item. The operator at https://cognidao.org
+coordinates code, CI, flight, validation, and merge. Subdirectory AGENTS.md files extend
+this floor; the closest file wins for code-local rules.
 
-## Live cognition
+Pointers: [code delivery](.agents/skills/contribute-to-cogni/SKILL.md) ·
+[Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) ·
+[discovery](https://cognidao.org/.well-known/agent.json)
 
-The gitignored cache is the live source for the rich contract, orientation, skills, and knowledge
-map. It is already model-visible before the first reply: Claude imports it from committed
-`CLAUDE.md`, Codex receives it as uncapped SessionStart developer context, and the supported
-OpenCode 1.x runtime combines it through `opencode.json`. Never manually read the cache merely to
-bootstrap; a required tool-read means the harness adapter failed.
-
-The shared session loader refreshes that cache from this node's authenticated
-`/api/v1/cognition` endpoint; workspace setup warms it before the first agent starts. A failed
-refresh preserves the last good copy. On first setup, register through the public
-`/api/v1/agent/register` seam and save `COGNI_NODE_API_KEY` in the gitignored `.env.cogni`;
-operator CI/CD keys are not cognition credentials.
-
-This repository owns the node app, graphs, packages, CI, and review policy. The operator at
-https://cognidao.org owns shared deployment infrastructure and coordinates flight, validation,
-and merge. Work against exactly one node + work item. Subdirectory `AGENTS.md` files extend this
-floor; the closest file wins for code-local rules.
-
-Pointers: [contributor contract](.claude/skills/contribute-to-cogni/SKILL.md) ·
-[knowledge design](docs/spec/knowledge-syntropy.md) ·
-[cognition design](https://github.com/Cogni-DAO/cogni/blob/main/docs/spec/node-baas-architecture.md#cognition-substrate) ·
-[operator discovery](https://cognidao.org/.well-known/agent.json)
+Local development: follow the [portable startup and agent API guide (review draft)](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-469da024). Use the target node repository, its environment example, and its own startup commands. Current node discovery and schemas take precedence over old operator examples.
