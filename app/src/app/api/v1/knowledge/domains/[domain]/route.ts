@@ -19,21 +19,30 @@ export const runtime = "nodejs";
 type DomainContext = { params: Promise<{ domain: string }> };
 
 export const GET = wrapRouteHandlerWithLogging<DomainContext>(
-  { routeId: "knowledge.domains.get", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "knowledge.domains.get",
+    auth: { mode: "required", getSessionUser },
+  },
   async (_ctx, _request, user, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     return handleGet((await context.params).domain, user);
   }
 );
 export const PATCH = wrapRouteHandlerWithLogging<DomainContext>(
-  { routeId: "knowledge.domains.update", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "knowledge.domains.update",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, request, user, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     return handleUpdate(request, (await context.params).domain, user, ctx.log);
   }
 );
 export const DELETE = wrapRouteHandlerWithLogging<DomainContext>(
-  { routeId: "knowledge.domains.delete", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "knowledge.domains.delete",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, _request, user, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     return handleDelete((await context.params).domain, user, ctx.log);

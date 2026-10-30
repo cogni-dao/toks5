@@ -157,10 +157,7 @@ function mapDomainWriteError(e: unknown): NextResponse {
 type DomainLog = Pick<RequestContext["log"], "info">;
 
 /** A typed, contract-checked error body (DOMAIN_ERRORS_ARE_TYPED). */
-function domainError(
-  status: number,
-  body: DomainsErrorResponse
-): NextResponse {
+function domainError(status: number, body: DomainsErrorResponse): NextResponse {
   return NextResponse.json(DomainsErrorResponseSchema.parse(body), { status });
 }
 
