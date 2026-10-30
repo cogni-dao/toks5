@@ -12,7 +12,7 @@ import type {
   WorkItemsContentPort,
   WorkQuery,
 } from "@cogni/work-items";
-import { rankScore, toWorkItemId } from "@cogni/work-items";
+import { toWorkItemDto, toWorkItemId } from "@cogni/work-items";
 
 export interface WorkItemCapabilityDeps {
   readonly workItemQuery: WorkItemQueryPort;
@@ -24,20 +24,7 @@ export interface WorkItemCapabilityDeps {
   };
 }
 function toInfo(item: WorkItem): WorkItemInfo {
-  const rank = rankScore(item.scores);
-  return {
-    ...item,
-    assignees: item.assignees.map((a) => ({
-      kind: a.kind,
-      id:
-        a.kind === "user"
-          ? a.userId
-          : a.kind === "agent"
-            ? a.agentId
-            : a.serviceId,
-    })),
-    ...(rank !== undefined && { rankScore: rank }),
-  };
+  return toWorkItemDto(item);
 }
 export function createWorkItemCapability(
   deps: WorkItemCapabilityDeps

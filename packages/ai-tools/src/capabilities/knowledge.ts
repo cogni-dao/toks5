@@ -3,10 +3,10 @@
 
 /** Shared knowledge capability contract, including approved-goal reads. */
 export type {
-  KnowledgeEntry,
-  KnowledgeSearchParams,
-  KnowledgeListParams,
-  KnowledgeWriteParams,
   KnowledgeCapability,
-} from "@cogni/shared-ai-tools";
-export { CONFIDENCE } from "@cogni/shared-ai-tools";
+  KnowledgeEntry,
+  KnowledgeListParams,
+  KnowledgeSearchParams,
+  KnowledgeWriteParams,
+} from "@cogni/knowledge-store/contracts";
+export { CONFIDENCE } from "@cogni/knowledge-store/contracts";

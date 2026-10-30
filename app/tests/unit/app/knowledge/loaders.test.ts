@@ -16,8 +16,10 @@
  * @internal
  */
 
-import { buildKnowledgeGraph, type Citation } from "@cogni/knowledge-store";
+import { createKnowledgeReadImplementation, knowledgeReadContract } from "@cogni/ai-tools";
+import { buildKnowledgeGraph, type Citation, createKnowledgeCapability } from "@cogni/knowledge-store";
 import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
+import { KnowledgeRowSchema } from "@cogni/node-contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -117,5 +119,22 @@ describe("knowledge SSR loaders", () => {
 
     expect(graph.edges.some((e) => e.target === "ghost")).toBe(false);
     expect(graph.edges).toHaveLength(1);
+  });
+});
+
+
+describe("Toks5 canonical knowledge read parity", () => {
+  it("carries every canonical field through HTTP loader and local tool validation", async () => {
+    const store = await seed();
+    const http = await loadKnowledgeList(store, { domain: DOMAIN });
+    const tool = createKnowledgeReadImplementation({ knowledgeCapability: createKnowledgeCapability(store) });
+    const output = knowledgeReadContract.outputSchema.parse(await tool.execute({ id: "k1" }));
+    const row = http.items.find(entry => entry.id === "k1");
+    expect(row).toBeDefined();
+    for (const key of Object.keys(KnowledgeRowSchema.shape)) {
+      expect(row).toHaveProperty(key);
+      expect(output.entries[0]).toHaveProperty(key);
+    }
+    expect(KnowledgeRowSchema.parse(output.entries[0])).toEqual(row);
   });
 });
