@@ -73,7 +73,8 @@ export type {
 /** Node-owned v1 lease compatibility; primary content retains scores and CAS. */
 export type WorkItemsDoltgresPort =
   import("@cogni/work-items").WorkItemsContentPort &
-    Pick<
-      import("@cogni/work-items-legacy/adapters/doltgres").WorkItemsDoltgresPort,
-      "claim" | "heartbeat" | "release"
-    >;
+    {
+      [Method in "claim" | "heartbeat" | "release"]: (
+        ...args: Parameters<import("@cogni/work-items-legacy/adapters/doltgres").WorkItemsDoltgresPort[Method]>
+      ) => Promise<import("@cogni/work-items").WorkItem>;
+    };
