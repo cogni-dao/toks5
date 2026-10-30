@@ -24,6 +24,7 @@
     "@cogni/ai-tools": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
     "@cogni/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.6.0/cogni-dao-knowledge-store-0.6.0.tgz",
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.2.5/cogni-dao-work-items-0.2.5.tgz",
     "@cogni/node-core": "workspace:*",
     "@ts-rest/core": "^3.52.1",
     "@ts-rest/open-api": "^3.52.1",

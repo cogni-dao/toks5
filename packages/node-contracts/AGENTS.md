@@ -66,6 +66,8 @@ All require `Authorization: Bearer ${SCHEDULER_API_TOKEN}`.
 - **Internal:** `@cogni/ai-core`, `@cogni/aragon-osx`, `@cogni/node-core`
 - **External:** `zod`, `@ts-rest/core`
 
+- WorkItemDtoSchema and KnowledgeRowSchema are re-exported from their published domain owners; HTTP envelopes derive without parallel field lists.
+
 ## Notes
 
 - Extracted from `apps/operator/src/contracts/` (task.0248 Phase 1)

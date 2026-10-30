@@ -34,7 +34,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
 }
 ```
 
-**External deps:** `zod`, `zod-to-json-schema`. Imports `@cogni/ai-core` (ToolSpec type). NO LangChain.
+**External deps:** `zod` (Zod4; schema compilation delegates to the public ai-tools package). Imports `@cogni/ai-core` (ToolSpec type). NO LangChain.
 
 ## Public Surface
 
@@ -100,7 +100,7 @@ pnpm --filter @cogni/ai-tools build
 ## Dependencies
 
 - **Internal:** `@cogni/ai-core` (ToolSpec type)
-- **External:** `zod`, `zod-to-json-schema`
+- **External:** `zod` (Zod4; schema compilation delegates to the public ai-tools package)
 
 ## Change Protocol
 
@@ -115,3 +115,5 @@ pnpm --filter @cogni/ai-tools build
 - Package isolation enables LangGraph Server to import tools without Next.js deps
 
 - Evaluation query/patch/search and goal_list are thin facades over exact public ai-tools0.1.1; local runtime helpers and other tools remain sovereign.
+
+- Knowledge/EDO contracts derive from knowledge-store/contracts; knowledge_read and Zod4 tool types/compiler delegate to the public ai-tools package. Local catalog and bindings remain sovereign.

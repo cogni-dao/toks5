@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { describe, expect, it, vi } from "vitest";
+import { createWorkItemQueryImplementation, workItemQueryContract } from "@cogni/ai-tools";
 import type { WorkItem, WorkItemsContentPort } from "@cogni/work-items";
-import { toWorkItemId, rankScore } from "@cogni/work-items";
+import { rankScore, toWorkItemDto, toWorkItemId } from "@cogni/work-items";
+import { describe, expect, it, vi } from "vitest";
 import { createWorkItemCapability } from "../../../src/bootstrap/capabilities/work-item";
+
 const scores = {
   goal: { v: 3 },
   time: { v: 2 },
@@ -20,7 +22,7 @@ const item = {
   status: "cancelled",
   node: "toks5",
   actor: "either",
-  assignees: [],
+  assignees: [{ kind: "user", userId: "toks5-owner" }],
   externalRefs: [],
   labels: [],
   specRefs: [],
@@ -31,6 +33,24 @@ const item = {
   scores,
 } as WorkItem;
 describe("TOKS5 live score writer", () => {
+  it("carries canonical DTO fields through local capability, tool execution and validation", async () => {
+    const capability = createWorkItemCapability({
+      workItemQuery: {} as never,
+      workItemCommand: {} as never,
+      backlogReader: { get: vi.fn(), list: vi.fn().mockResolvedValue({ items: [item] }) },
+    });
+    const [info] = await capability.query({ ids: [item.id] });
+    expect(info).toEqual(toWorkItemDto(item));
+    const tool = createWorkItemQueryImplementation({ workItemCapability: capability });
+    const result = workItemQueryContract.outputSchema.parse(await tool.execute({ ids: [item.id] }));
+    const row = result.items[0];
+    expect(row).toBeDefined();
+    for (const key of Object.keys(toWorkItemDto(item))) expect(row).toHaveProperty(key);
+    expect(row?.assignees[0]).toMatchObject({ kind: "user", userId: "toks5-owner" });
+    expect(row?.createdAt).toBe(item.createdAt);
+    expect(row?.deployVerified).toBe(false);
+  });
+
   it("resolves each actor at invocation, reads six fields/rank and fails closed without actor", async () => {
     let actor = "actor-a";
     const patch = vi.fn().mockResolvedValue(item);

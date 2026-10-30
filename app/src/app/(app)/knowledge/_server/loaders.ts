@@ -26,6 +26,7 @@ import {
   buildKnowledgeGraph,
   type KnowledgeGraphModel,
   type KnowledgeStorePort,
+  toKnowledgeRow,
 } from "@cogni/knowledge-store";
 import {
   type DomainsListResponse,
@@ -65,21 +66,7 @@ export async function loadKnowledgeList(
   for (const rows of perDomain) {
     for (const r of rows) {
       if (opts.sourceType && r.sourceType !== opts.sourceType) continue;
-      items.push({
-        id: r.id,
-        domain: r.domain,
-        entityId: r.entityId ?? null,
-        title: r.title,
-        content: r.content,
-        entryType: r.entryType ?? "finding",
-        confidencePct: r.confidencePct ?? null,
-        sourceType: r.sourceType,
-        sourceRef: r.sourceRef ?? null,
-        tags: r.tags ?? null,
-        evaluateAt: r.evaluateAt ? r.evaluateAt.toISOString() : null,
-        resolutionStrategy: r.resolutionStrategy ?? null,
-        createdAt: r.createdAt ? r.createdAt.toISOString() : null,
-      });
+      items.push(toKnowledgeRow(r));
       if (opts.limit != null && items.length >= opts.limit) break;
     }
     if (opts.limit != null && items.length >= opts.limit) break;

@@ -16,6 +16,7 @@
 import {
   Activity,
   FileSignature,
+  LayoutDashboard,
   PieChart,
 } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
@@ -23,6 +24,12 @@ import type { ReactElement, ReactNode } from "react";
 import { NavigationLink } from "@/components";
 
 const GOV_TABS = [
+  {
+    href: "/dashboard",
+    label: "System",
+    icon: LayoutDashboard,
+    match: "exact" as const,
+  },
   {
     href: "/gov/holdings",
     label: "Ownership",
