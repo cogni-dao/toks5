@@ -20,11 +20,27 @@ import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Stub the public shell boundary so this test stays scoped to layout behavior.
-vi.mock("@/features/layout", () => ({
-  AppShell: ({ children }: { children?: ReactNode }) => (
-    <div data-testid="app-shell">{children}</div>
+// Load only the real shell, avoiding unrelated exports in the layout barrel.
+vi.mock("@/features/layout", async () => ({
+  AppShell: (await import("@/features/layout/components/AppShell")).AppShell,
+}));
+
+// Stub sidebar shell so this test stays scoped to the layout behavior
+vi.mock("@/components", () => ({
+  SidebarProvider: ({ children }: { children?: ReactNode }) => (
+    <div data-testid="sidebar-provider">{children}</div>
   ),
+  SidebarInset: ({ children }: { children?: ReactNode }) => (
+    <div data-testid="sidebar-inset">{children}</div>
+  ),
+}));
+
+vi.mock("@/features/layout/components/AppSidebar", () => ({
+  AppSidebar: () => <div data-testid="app-sidebar" />,
+}));
+
+vi.mock("@/features/layout/components/AppTopBar", () => ({
+  AppTopBar: () => <div data-testid="app-topbar" />,
 }));
 
 describe("AppLayout Shell", () => {
@@ -41,7 +57,14 @@ describe("AppLayout Shell", () => {
       </APP_LAYOUT>
     );
 
-    expect(screen.getByTestId("app-shell")).toContainElement(
+    // Should render the full layout structure
+    expect(screen.getByTestId("sidebar-provider")).toBeInTheDocument();
+    expect(screen.getByTestId("app-sidebar")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-inset")).toBeInTheDocument();
+    expect(screen.getByTestId("app-topbar")).toBeInTheDocument();
+
+    // Should render children
+    expect(screen.getByTestId("sidebar-inset")).toContainElement(
       screen.getByTestId("children")
     );
     expect(screen.getByText("Protected Content")).toBeInTheDocument();
