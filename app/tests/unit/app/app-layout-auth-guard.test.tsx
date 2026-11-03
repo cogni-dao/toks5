@@ -20,6 +20,11 @@ import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Load only the real shell, avoiding unrelated exports in the layout barrel.
+vi.mock("@/features/layout", async () => ({
+  AppShell: (await import("@/features/layout/components/AppShell")).AppShell,
+}));
+
 // Stub sidebar shell so this test stays scoped to the layout behavior
 vi.mock("@/components", () => ({
   SidebarProvider: ({ children }: { children?: ReactNode }) => (
@@ -30,8 +35,11 @@ vi.mock("@/components", () => ({
   ),
 }));
 
-vi.mock("@/features/layout", () => ({
+vi.mock("@/features/layout/components/AppSidebar", () => ({
   AppSidebar: () => <div data-testid="app-sidebar" />,
+}));
+
+vi.mock("@/features/layout/components/AppTopBar", () => ({
   AppTopBar: () => <div data-testid="app-topbar" />,
 }));
 
@@ -56,7 +64,9 @@ describe("AppLayout Shell", () => {
     expect(screen.getByTestId("app-topbar")).toBeInTheDocument();
 
     // Should render children
-    expect(screen.getByTestId("children")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-inset")).toContainElement(
+      screen.getByTestId("children")
+    );
     expect(screen.getByText("Protected Content")).toBeInTheDocument();
   });
 });
