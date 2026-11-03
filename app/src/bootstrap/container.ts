@@ -52,6 +52,7 @@ import {
 import {
 	buildDoltgresClient,
 	createDoltgresPusher,
+	DoltBranchSessionRunner,
 	DoltgresEdoResolverAdapter,
 	DoltgresKnowledgeContributionAdapter,
 	DoltgresKnowledgeStoreAdapter,
@@ -70,7 +71,10 @@ import {
 import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
+import type { ScheduleRunReader } from "@cogni/scheduling";
+import { PostgresScheduleRunReader } from "@cogni/scheduling/adapters/postgres";
 import type { WorkItemQueryPort } from "@cogni/work-items";
+import { DoltgresWorkItemAdapter as LegacyWorkItemAdapter } from "@cogni/work-items-legacy/adapters/doltgres";
 import { DoltgresWorkItemAdapter } from "@cogni/work-items/adapters/doltgres";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import {
@@ -97,6 +101,7 @@ import {
 	GITHUB_ADAPTER_VERSION,
 	GitHubWebhookNormalizer,
 	getAppDb,
+	getExecutionScope,
 	LangfuseAdapter,
 	LiteLlmAdapter,
 	type MimirAdapterConfig,
@@ -139,6 +144,7 @@ import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
+import { composeWorkItemContent } from "@/bootstrap/capabilities/work-item-composition";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
@@ -234,6 +240,7 @@ export interface Container {
 	executionRequestPort: ExecutionRequestPort;
 	graphRunRepository: GraphRunRepository;
 	scheduleManager: ScheduleUserPort;
+	scheduleRunReader: ScheduleRunReader;
 	/** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
 	metricsCapability: MetricsCapability;
 	/** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
@@ -656,6 +663,8 @@ function createContainer(): Container {
 		log.child({ component: "DrizzleScheduleUserAdapter" }),
 	);
 
+	const scheduleRunReader = new PostgresScheduleRunReader(db.$client);
+
 	// Worker scheduling (serviceDb, BYPASSRLS)
 	const executionGrantWorkerPort = new DrizzleExecutionGrantWorkerAdapter(
 		serviceDb,
@@ -691,7 +700,21 @@ function createContainer(): Container {
 		// QUERY_READS_THE_LIVE_BACKLOG: the AI query tool (and the prioritizer) reads
 		// this node's Doltgres work items; `doltgresWorkItems` is assigned below and
 		// read only at call time.
-		backlogReader: { list: (query) => doltgresWorkItems.list(query) },
+		backlogReader: {
+			get: (id) => doltgresWorkItems.get(id),
+			list: (query) => doltgresWorkItems.list(query),
+		},
+		backlogWriter: {
+			patch: (input, principal) => doltgresWorkItems.patch(input, principal),
+			principalId: () => {
+				const actor = getExecutionScope().actorUserId;
+				if (!actor)
+					throw new Error(
+						"Work item writer requires an authenticated run actor"
+					);
+				return actor;
+			},
+		},
 	});
 
 	// ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)
@@ -728,15 +751,55 @@ function createContainer(): Container {
 				applicationName: `cogni_work_items_${env.SERVICE_NAME ?? "app"}`,
 				max: 1,
 			});
-		const workItemsClient = createWorkItemsClient();
-		// Node stores start their allocator at 1; operator alone reserves the
-		// imported legacy range below 5000.
-		doltgresWorkItems = new DoltgresWorkItemAdapter(workItemsClient, {
+		const createLegacyClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_work_items_v1_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
+		const createReadClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_work_items_read_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
+		const content = new DoltgresWorkItemAdapter(createWorkItemsClient(), {
 			logger: log,
 			recreateClient: createWorkItemsClient,
+			writerLockProtocol: "bridge",
+			readClient: createReadClient(),
+			recreateReadClient: createReadClient,
+			readConnectionBudget: 2,
 		});
+		const legacy = new LegacyWorkItemAdapter(createLegacyClient(), {
+			logger: log,
+			recreateClient: createLegacyClient,
+		});
+		doltgresWorkItems = composeWorkItemContent(content, legacy);
+		const createKnowledgeBranchClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
+		// Branch work gets its own `max: 1` client, deliberately NOT the pool that
+		// serves reads. Dolt branch ops need a session-pinned connection; bounding
+		// them above the pool (FIFO + advisory lock, see `DoltBranchSessionRunner`)
+		// is what keeps a burst of admin rejects from burning every slot — and
+		// keeping them off the read pool is what keeps knowledge reads alive while
+		// a write is degraded (bug.5391, bug.5358). Carries the bug.5544 evict-and-
+		// replace fix via @cogni-dao/doltgres-admission bundled in knowledge-store.
+		const knowledgeWriter = new DoltBranchSessionRunner(
+			createKnowledgeBranchClient(),
+			{
+				writerProtocol: "database",
+				logger: log,
+				recreateClient: createKnowledgeBranchClient,
+			}
+		);
 		const knowledgePort = new DoltgresKnowledgeStoreAdapter({
 			sql: doltClient,
+			writerSession: knowledgeWriter,
 		});
 		knowledgeStorePort = knowledgePort;
 		knowledgeCapability = createKnowledgeCapability(knowledgePort);
@@ -747,6 +810,8 @@ function createContainer(): Container {
 		edoCapability = createEdoCapability(knowledgePort, edoResolver);
 		const contributionPort = new DoltgresKnowledgeContributionAdapter({
 			sql: doltClient,
+			writerSession: knowledgeWriter,
+			logger: log,
 		});
 		// Optional post-merge mirror to DoltHub (task.5069). Disabled when
 		// DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
@@ -823,6 +888,7 @@ function createContainer(): Container {
 
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
 	const toolBindings = createToolBindings({
+		nodePublicOrigin: env.APP_BASE_URL,
 		knowledgeCapability,
 		edoCapability,
 		metricsCapability,
@@ -976,6 +1042,7 @@ function createContainer(): Container {
 		executionRequestPort,
 		graphRunRepository,
 		scheduleManager,
+		scheduleRunReader,
 		metricsCapability,
 		webSearchCapability,
 		repoCapability,

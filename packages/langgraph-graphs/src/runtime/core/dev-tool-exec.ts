@@ -22,7 +22,10 @@ import {
   createToolRunner,
   type ToolExecFn,
 } from "@cogni/ai-core";
-import { type CatalogBoundTool, toBoundToolRuntime } from "@cogni/ai-tools";
+import {
+  type CatalogBoundTool,
+  toBoundToolRuntime,
+} from "@cogni/toks5-ai-tools";
 
 /**
  * No-op event emitter for dev server.

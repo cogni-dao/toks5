@@ -16,8 +16,10 @@
  * @internal
  */
 
-import { buildKnowledgeGraph, type Citation } from "@cogni/knowledge-store";
+import { createKnowledgeReadImplementation, knowledgeReadContract } from "@cogni/ai-tools";
+import { buildKnowledgeGraph, type Citation, createKnowledgeCapability } from "@cogni/knowledge-store";
 import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
+import { KnowledgeRowSchema } from "@cogni/node-contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -31,27 +33,32 @@ const DOMAIN = "operator";
 async function seed() {
   const store = new FakeKnowledgeStoreAdapter();
   await store.registerDomain({ id: DOMAIN, name: "Operator" });
-  await store.addKnowledge({
-    id: "k1",
-    domain: DOMAIN,
-    title: "First",
-    content: "...",
-    entryType: "finding",
-    sourceType: "agent",
-  });
-  await store.addKnowledge({
-    id: "k2",
-    domain: DOMAIN,
-    title: "Second",
-    content: "...",
-    entryType: "finding",
-    sourceType: "agent",
-  });
-  await store.addCitation({
-    citingId: "k1",
-    citedId: "k2",
-    citationType: "supports",
-  });
+  await store.withWrite(
+    { operationId: "test.seed", message: "Seed read fixtures" },
+    async (write) => {
+      await write.addKnowledge({
+        id: "k1",
+        domain: DOMAIN,
+        title: "First",
+        content: "...",
+        entryType: "finding",
+        sourceType: "agent",
+      });
+      await write.addKnowledge({
+        id: "k2",
+        domain: DOMAIN,
+        title: "Second",
+        content: "...",
+        entryType: "finding",
+        sourceType: "agent",
+      });
+      await write.addCitation({
+        citingId: "k1",
+        citedId: "k2",
+        citationType: "supports",
+      });
+    }
+  );
   return store;
 }
 
@@ -95,9 +102,7 @@ describe("knowledge SSR loaders", () => {
   it("buildKnowledgeGraph drops an edge whose endpoint is not a node (EDGE_ENDPOINTS_EXIST)", async () => {
     const store = await seed();
     const domains = await store.listDomains();
-    const entries = (
-      await Promise.all(domains.map((d) => store.listKnowledge(d)))
-    ).flat();
+    const nodes = await store.listKnowledgeGraphNodes();
     const dangling: Citation = {
       id: "dangle",
       citingId: "k1",
@@ -108,11 +113,28 @@ describe("knowledge SSR loaders", () => {
 
     const graph = buildKnowledgeGraph({
       domains,
-      entries,
+      nodes,
       citations: [...(await store.listAllCitations()), dangling],
     });
 
     expect(graph.edges.some((e) => e.target === "ghost")).toBe(false);
     expect(graph.edges).toHaveLength(1);
+  });
+});
+
+
+describe("Toks5 canonical knowledge read parity", () => {
+  it("carries every canonical field through HTTP loader and local tool validation", async () => {
+    const store = await seed();
+    const http = await loadKnowledgeList(store, { domain: DOMAIN });
+    const tool = createKnowledgeReadImplementation({ knowledgeCapability: createKnowledgeCapability(store) });
+    const output = knowledgeReadContract.outputSchema.parse(await tool.execute({ id: "k1" }));
+    const row = http.items.find(entry => entry.id === "k1");
+    expect(row).toBeDefined();
+    for (const key of Object.keys(KnowledgeRowSchema.shape)) {
+      expect(row).toHaveProperty(key);
+      expect(output.entries[0]).toHaveProperty(key);
+    }
+    expect(KnowledgeRowSchema.parse(output.entries[0])).toEqual(row);
   });
 });

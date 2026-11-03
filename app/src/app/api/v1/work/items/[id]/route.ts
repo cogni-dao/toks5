@@ -25,6 +25,9 @@ import {
   WorkItemForbiddenError,
   WorkItemNotFoundError,
   WorkItemsBackendNotReadyError,
+  WorkItemScoresInvalidError,
+  WorkItemWriteOutcomeUnknownError,
+  WorkItemRevisionConflictError,
   NodeAdminRequiredError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -125,6 +128,34 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
+      if (e instanceof WorkItemWriteOutcomeUnknownError)
+        return NextResponse.json(
+          {
+            error: e.message,
+            errorCode: e.code,
+            retryable: false,
+            receipt: e.receipt,
+            operationId: e.operationId,
+            branch: e.branch,
+            commitHash: e.commitHash ?? null,
+            itemId: e.itemId ?? null,
+          },
+          { status: 500 }
+        );
+      if (e instanceof WorkItemScoresInvalidError)
+        return NextResponse.json(
+          { error: "invalid input", errorCode: e.code, issues: e.issues },
+          { status: 400 }
+        );
+      if (e instanceof WorkItemRevisionConflictError)
+        return NextResponse.json(
+          {
+            error: "revision_conflict",
+            expectedRevision: e.expectedRevision,
+            currentRevision: e.currentRevision,
+          },
+          { status: 409 }
+        );
       if (e instanceof WorkItemNotFoundError) {
         return NextResponse.json({ error: e.message }, { status: 404 });
       }

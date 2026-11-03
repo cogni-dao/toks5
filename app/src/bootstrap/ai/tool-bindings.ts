@@ -29,6 +29,7 @@ import {
   createEdoDecideImplementation,
   createEdoHypothesizeImplementation,
   createEdoRecordOutcomeImplementation,
+  createGoalListImplementation,
   createKnowledgeReadImplementation,
   createKnowledgeSearchImplementation,
   createKnowledgeWriteImplementation,
@@ -50,6 +51,7 @@ import {
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
   GET_CURRENT_TIME_NAME,
+  GOAL_LIST_NAME,
   getCurrentTimeImplementation,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
@@ -75,6 +77,7 @@ import {
  * These are resolved from the container at bootstrap time.
  */
 export interface ToolBindingDeps {
+  readonly nodePublicOrigin?: string | undefined;
   readonly knowledgeCapability: KnowledgeCapability;
   readonly edoCapability: EdoCapability;
   readonly metricsCapability: MetricsCapability;
@@ -115,11 +118,17 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       getCurrentTimeImplementation as AnyToolImplementation,
 
     // Knowledge tools (Doltgres-backed knowledge store)
+    [GOAL_LIST_NAME]: createGoalListImplementation({
+      knowledgeCapability: deps.knowledgeCapability,
+      nodePublicOrigin: deps.nodePublicOrigin,
+    }) as AnyToolImplementation,
     [KNOWLEDGE_SEARCH_NAME]: createKnowledgeSearchImplementation({
       knowledgeCapability: deps.knowledgeCapability,
+      nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
     [KNOWLEDGE_READ_NAME]: createKnowledgeReadImplementation({
       knowledgeCapability: deps.knowledgeCapability,
+      nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
     [KNOWLEDGE_WRITE_NAME]: createKnowledgeWriteImplementation({
       knowledgeCapability: deps.knowledgeCapability,
@@ -188,6 +197,7 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
 
     [WORK_ITEM_QUERY_NAME]: createWorkItemQueryImplementation({
       workItemCapability: deps.workItemCapability,
+      nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
 
     [WORK_ITEM_TRANSITION_NAME]: createWorkItemTransitionImplementation({

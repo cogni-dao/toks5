@@ -17,13 +17,12 @@
  */
 
 import type { ToolExecFn } from "@cogni/ai-core";
-import type { ToolContract } from "@cogni/ai-tools";
+import type { ToolContract } from "@cogni/toks5-ai-tools";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
   DynamicStructuredTool,
   type StructuredToolInterface,
 } from "@langchain/core/tools";
-import type { z } from "zod";
 
 // Re-export canonical types for consumers (per TOOL_EXEC_TYPES_IN_AI_CORE)
 export type { ToolExecFn, ToolExecResult } from "@cogni/ai-core";
@@ -45,7 +44,7 @@ export type ExecResolver = (config?: RunnableConfig) => ToolExecFn;
 function createTool(toolConfig: {
   name: string;
   description: string;
-  schema: z.ZodTypeAny;
+  schema: ToolContract<string, unknown, unknown, unknown>["inputSchema"];
   func: (
     args: unknown,
     runManager?: unknown,

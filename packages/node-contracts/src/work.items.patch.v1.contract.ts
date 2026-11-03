@@ -9,7 +9,7 @@
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
  *   - PATCH_ALLOWLIST: only fields in `set` are mutable. id/created_at/updated_at are server-managed.
- *   - v0 has no expectedRevision optimistic concurrency and no transition state-machine — whoever holds a valid token is trusted.
+ *   - Optional expectedRevision enables compare-and-set and no transition state-machine — whoever holds a valid token is trusted.
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -17,7 +17,10 @@
 
 import { z } from "zod";
 
-import { WorkItemDtoSchema } from "./work.items.list.v1.contract";
+import {
+  WorkItemDtoSchema,
+  WorkItemScoresInputSchema,
+} from "./work.items.list.v1.contract";
 
 const WorkItemStatusSchema = z.enum([
   "needs_triage",
@@ -38,6 +41,7 @@ export const workItemsPatchOperation = {
     "Updates a subset of fields on a work item. Whitelisted fields only — id, created_at, updated_at are server-managed.",
   input: z.object({
     id: z.string(),
+    expectedRevision: z.number().int().min(0).optional(),
     set: z
       .strictObject({
         title: z.string().min(1).max(500).optional(),
@@ -47,6 +51,7 @@ export const workItemsPatchOperation = {
         priority: z.number().int().min(0).max(99).optional(),
         rank: z.number().int().optional(),
         estimate: z.number().int().optional(),
+        scores: WorkItemScoresInputSchema.nullable().optional(),
         labels: z.array(z.string()).optional(),
         specRefs: z.array(z.string()).optional(),
         branch: z.string().optional(),
