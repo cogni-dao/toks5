@@ -26,6 +26,7 @@ export async function GET(): Promise<NextResponse> {
     version:
       // biome-ignore lint/style/noProcessEnv: build-time constant from npm_package_version
       process.env.npm_package_version || "unknown",
+    // Reports the built artifact revision used for exact-SHA deployment verification.
     buildSha: env.APP_BUILD_SHA || undefined,
     // biome-ignore lint/style/noProcessEnv: build-time constant
     buildTime: process.env.BUILD_TIME || undefined,
