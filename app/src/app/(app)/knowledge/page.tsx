@@ -18,8 +18,10 @@
  * @public
  */
 
+import { GoalsProgressSchema } from "@cogni-dao/metrics/contracts";
 import { redirect } from "next/navigation";
 
+import { loadGoalsProgress } from "@/app/_facades/metrics.server";
 import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
@@ -55,6 +57,15 @@ export default async function KnowledgePage({
   const port = getContainer().knowledgeStorePort;
   const { mode } = await searchParams;
 
+  // Goal progress is only pre-read on a `?mode=goals` deep-link; a shape drift
+  // degrades to a client fetch instead of a hydration mismatch.
+  const goalsSeed =
+    mode === "goals"
+      ? safe(loadGoalsProgress()).then(
+          (d) => GoalsProgressSchema.safeParse(d).data
+        )
+      : Promise.resolve(undefined);
+
   const [initialList, initialDomains, initialGraph] = port
     ? await Promise.all([
         // limit=500 matches the browse client fetcher (LIST_LIMIT_PARITY).
@@ -65,12 +76,14 @@ export default async function KnowledgePage({
           : Promise.resolve(undefined),
       ])
     : [undefined, undefined, undefined];
+  const initialGoals = await goalsSeed;
 
   return (
     <KnowledgeDashboardView
       initialList={initialList}
       initialDomains={initialDomains}
       initialGraph={initialGraph}
+      initialGoals={initialGoals}
     />
   );
 }
