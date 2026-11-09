@@ -78,14 +78,17 @@ type DoltgresMock = {
   patch: ReturnType<typeof vi.fn>;
 };
 
+function doltgresNotConfigured(): Error {
+  return Object.assign(new Error("DOLTGRES_URL not set"), {
+    name: "DoltgresNotConfiguredError",
+  });
+}
+
 function createDoltgresMock(): DoltgresMock {
-  // Default behavior: doltgres returns empty so the facade tests focus on
-  // markdown path + DTO mapping.
+  // Default behavior: Doltgres is unconfigured, the only case where the facade
+  // reads Markdown (task.0056), so these tests focus on the DTO mapping.
   return {
-    list: vi.fn().mockResolvedValue({
-      items: [],
-      pageInfo: { endCursor: null, hasMore: false },
-    }),
+    list: vi.fn().mockRejectedValue(doltgresNotConfigured()),
     get: vi.fn(),
     create: vi.fn(),
     patch: vi.fn(),
@@ -189,7 +192,7 @@ describe("app/_facades/work/items.server", () => {
 
       await listWorkItems({});
 
-      expect(mockPort.list).toHaveBeenCalledWith({});
+      expect(mockPort.list).toHaveBeenCalledWith({ limit: 100 });
     });
 
     it("returns empty items for empty result", async () => {
@@ -218,6 +221,18 @@ describe("app/_facades/work/items.server", () => {
         hasMore: true,
       });
       expect(result.nextCursor).toBe("cursor-xyz");
+    });
+
+    it("reads configured Doltgres only: page 1 never merges the Markdown list (task.0056)", async () => {
+      mockDoltgres.list.mockResolvedValue({
+        items: [SAMPLE_WORK_ITEM],
+        pageInfo: { endCursor: null, hasMore: false },
+      });
+
+      const result = await listWorkItems({});
+
+      expect(result.items.map((item) => item.id)).toEqual(["task.0001"]);
+      expect(mockPort.list).not.toHaveBeenCalled();
     });
 
     it("forwards cursor to doltgres and skips markdown source", async () => {

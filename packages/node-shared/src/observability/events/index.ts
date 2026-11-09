@@ -17,6 +17,8 @@
 // ============================================================================
 
 export const EVENT_NAMES = {
+	// Bounded work reads (task.0056): one terminal event per /work/summaries or /work/board request.
+	WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",
 	AI_LLM_CALL: "ai.llm_call",

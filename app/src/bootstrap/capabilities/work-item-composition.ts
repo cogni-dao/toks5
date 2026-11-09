@@ -23,7 +23,7 @@ export function composeWorkItemContent(
     "get" | "list" | "claim" | "heartbeat" | "release" | "delete"
   >
 ): WorkItemsDoltgresPort {
-  const { history } = content;
+  const { history, listBoardColumns } = content;
   const refresh = async (item: WorkItem): Promise<WorkItem> => {
     const current = await content.get(item.id);
     if (!current) throw new Error(`Work item not found: ${item.id}`);
@@ -37,7 +37,10 @@ export function composeWorkItemContent(
     list: async (query = {}) => {
       const page = await content.list(query);
       if (!page.items.length) return page;
-      const oldPage = await legacy.list(query);
+      // BOUNDED_CLAIM_OVERLAY (task.0056): one keyed legacy read of exactly this
+      // page's ids, never the caller's filters/cursor replayed against v1 rows.
+      const ids = page.items.map((item) => item.id);
+      const oldPage = await legacy.list({ ids, limit: ids.length });
       const claims = new Map(oldPage.items.map((item) => [item.id, item]));
       return {
         ...page,
@@ -46,7 +49,13 @@ export function composeWorkItemContent(
         ),
       };
     },
-    listSummaries: (query) => content.listSummaries(query),
+    // Bounded reads (task.0056): summaries and the composed board carry no claim
+    // overlay, so they read the content store once with the caller's bounds.
+    listSummaries: (query, options) => content.listSummaries(query, options),
+    ...(listBoardColumns && {
+      listBoardColumns: (query, statuses, perColumn, options) =>
+        listBoardColumns.call(content, query, statuses, perColumn, options),
+    }),
     ...(history && { history: (id) => history.call(content, id) }),
     create: (input, principal) => content.create(input, principal),
     patch: async (input, principal) =>

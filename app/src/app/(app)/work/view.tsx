@@ -9,17 +9,27 @@
  * Scope: Presentation. Fetches data via React Query.
  * Invariants:
  *   - BOARD_FROM_PACKAGE — board mode renders only `WorkBoardToolbar` and
- *     `WorkBoardView` from `@cogni/knowledge-base-ui` (task.0044).
+ *     `WorkBoardView` from `@cogni/knowledge-base-ui` (task.0044), fed by the
+ *     package's `useWorkBoard` (task.0056).
+ *   - BOUNDED_BOARD_READS — the page never downloads the backlog. Board mode
+ *     makes one `/api/v1/work/board` request (≤20 summaries per visible status
+ *     column) and one `/api/v1/work/summaries` request per column "Load more";
+ *     table mode requests one cursor page through `useWorkTablePage`. No client
+ *     code walks cursors (task.0056).
+ *   - PACKAGE_QUERY_MAPPING — board and table requests are built by the package
+ *     (`workBoardTableStateToQuery` + the shared codec): unsupported sort fields
+ *     are dropped and `?pageSize=500` clamps to 100. Only URL navigation (cursor
+ *     + an in-memory previous-page stack) stays here.
  *   - HEADER_OWNS_SORT_AND_FILTER — sort + per-column facet filter live in
  *     the package column headers (see `_components/columns.tsx`).
  *   - SINGLE_COLUMNS_TOGGLE — table visibility lives in one toolbar button
  *     (`DataGridColumnVisibility`), not on every column dropdown.
  *   - URL_DRIVEN_STATE — filters / sort / search / rank range / view / board
  *     columns persist in URL params.
- *   - ONE_ROW_MODEL — the board renders the table's filtered, sorted rows
- *     (unpaginated); the table paginates the same rows.
- *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemDto`.
- * Side-effects: IO (fetches from /api/v1/work/items)
+ *   - SERVER_FILTERS — filters, sort and search run on the server; the table
+ *     only renders the page it received (manual sorting/filtering/pagination).
+ *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemSummary`.
+ * Side-effects: IO (fetches the board, summary pages and full item detail)
  * Links: [WorkPage](./page.tsx), [fetchWorkItems](./_api/fetchWorkItems.ts)
  * @public
  */
@@ -28,19 +38,25 @@
 
 import {
   ACTIVE_WORK_STATUSES,
+  clampWorkPageSize,
+  useWorkBoard,
+  useWorkTablePage,
   WORK_STATUSES,
+  WORK_TABLE_PAGE_SIZES,
   WorkBoardToolbar,
   WorkBoardView,
   type WorkTableMeta,
+  workBoardTableStateToQuery,
   workItemGlobalFilterFn,
+  workPageStackNext,
+  workPageStackPrevious,
 } from "@cogni/knowledge-base-ui";
-import type { WorkItemDto } from "@cogni/node-contracts";
+import type { WorkItemSummary } from "@cogni/node-contracts";
 import {
   DataGrid,
   DataGridContainer,
 } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
-import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -49,9 +65,6 @@ import {
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
   type SortingState,
   useReactTable,
   type VisibilityState,
@@ -59,9 +72,20 @@ import {
 import { Columns3, List, Settings2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button } from "@/components";
+import {
+  Button,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components";
 
-import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
+import {
+  fetchWorkBoard,
+  fetchWorkItem,
+  fetchWorkItems,
+} from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
 import { WorkGoalLink } from "./_components/WorkKanban";
@@ -119,18 +143,12 @@ export function WorkDashboardView({
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["work-items"],
-    queryFn: fetchWorkItems,
-    staleTime: 30_000,
-  });
-
-  const items = data?.items ?? [];
   const boardView = searchParams.get("view") === "board";
+  const cursor = searchParams.get("cursor") ?? "";
 
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId],
-    queryFn: () => fetchWorkItem(selectedItemId as string),
+    queryFn: ({ signal }) => fetchWorkItem(selectedItemId as string, signal),
     enabled: selectedItemId !== undefined,
     retry: false,
     staleTime: 30_000,
@@ -156,6 +174,50 @@ export function WorkDashboardView({
     useState<ColumnFiltersState>(initialFilters);
   const [globalFilter, setGlobalFilter] = useState(searchParams.get("q") ?? "");
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const visibleStatuses = readColumns(searchParams);
+
+  // PACKAGE_QUERY_MAPPING: board and table requests come from the package's
+  // table-state mapping and codec, built from the committed URL state.
+  const committedQuery = searchParams.get("q") ?? "";
+  const filterQuery = useMemo(
+    () =>
+      workBoardTableStateToQuery({
+        sorting: initialSorting,
+        columnFilters: initialFilters,
+        globalFilter: committedQuery,
+      }),
+    [initialFilters, initialSorting, committedQuery]
+  );
+  const tablePage = useWorkTablePage({
+    query: filterQuery,
+    pageSize: searchParams.get("pageSize"),
+    cursor,
+    fetchPage: fetchWorkItems,
+    enabled: !boardView,
+  });
+  // Board reads share the table's filters and sort, never its page window.
+  const board = useWorkBoard({
+    query: filterQuery,
+    statuses: boardView ? visibleStatuses : [],
+    fetchBoard: fetchWorkBoard,
+    fetchPage: fetchWorkItems,
+  });
+  const isLoading = boardView ? board.isLoading : tablePage.isLoading;
+  const error = boardView ? board.error : tablePage.error;
+  const items = (boardView
+    ? board.items
+    : tablePage.items) as WorkItemSummary[];
+  const tableEmptyMessage = tablePage.nextCursor
+    ? "No matches on this page yet. Next continues the search."
+    : "No work items found.";
+
+  // Previous-page cursors for the current listing only (bounded by the package).
+  const [pageStack, setPageStack] = useState<{
+    readonly key: string;
+    readonly stack: readonly string[];
+  }>({ key: "", stack: [] });
+  const history =
+    pageStack.key === tablePage.listingKey ? pageStack.stack : [];
 
   const syncUrl = useCallback(
     (
@@ -172,8 +234,11 @@ export function WorkDashboardView({
         return Array.isArray(value) ? (value as string[]) : [];
       };
       const sort = newSorting[0];
+      // A cursor is valid only for the listing that issued it.
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("cursor");
       router.replace(
-        workViewHref(selectedItemId, searchParams, {
+        workViewHref(selectedItemId, params, {
           type: valuesFor("type"),
           status: valuesFor("status"),
           project: valuesFor("projectId"),
@@ -187,8 +252,34 @@ export function WorkDashboardView({
     [router, searchParams, selectedItemId]
   );
 
+  const changePage = (action: "next" | "previous" | "restart") => {
+    let next = "";
+    let stack: string[] = [];
+    if (action === "next") {
+      // An empty capped page still carries a cursor: Next continues the search.
+      if (!tablePage.nextCursor) return;
+      next = tablePage.nextCursor;
+      stack = workPageStackNext(history, cursor);
+    } else if (action === "previous") {
+      const previous = workPageStackPrevious(history);
+      if (!cursor || !previous) return;
+      next = previous.cursor;
+      stack = previous.stack;
+    } else if (!cursor) return;
+    setPageStack({ key: tablePage.listingKey, stack });
+    const params = new URLSearchParams(searchParams.toString());
+    if (next) params.set("cursor", next);
+    else params.delete("cursor");
+    router.replace(
+      selectedItemId
+        ? workItemHref(selectedItemId, params)
+        : workListHref(params),
+      { scroll: false }
+    );
+  };
+
   const openItem = useCallback(
-    (item: WorkItemDto) => {
+    (item: WorkItemSummary) => {
       openWorkItemPermalink(router, item.id, searchParams);
     },
     [router, searchParams]
@@ -199,6 +290,7 @@ export function WorkDashboardView({
   }, [router, searchParams]);
 
   const table = useReactTable({
+    getRowId: (item) => item.id,
     data: items,
     columns,
     meta: { isLoading } satisfies WorkTableMeta,
@@ -221,10 +313,10 @@ export function WorkDashboardView({
     },
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    // Board mode shows every filtered row; only the table paginates.
-    ...(boardView ? {} : { getPaginationRowModel: getPaginationRowModel() }),
+    // SERVER_FILTERS: the server filtered, sorted and paged these rows.
+    manualSorting: true,
+    manualFiltering: true,
+    manualPagination: true,
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
     globalFilterFn: workItemGlobalFilterFn,
@@ -279,12 +371,11 @@ export function WorkDashboardView({
     return () => document.removeEventListener("keydown", handleKey);
   }, [rows, focusedRowIndex, selectedItemId, openItem, closeItem]);
 
-  const visibleStatuses = readColumns(searchParams);
-
   const setView = (view: "board" | "table") => {
     const params = new URLSearchParams(searchParams.toString());
     if (view === "board") params.set("view", "board");
     else params.delete("view");
+    params.delete("cursor");
     router.replace(
       selectedItemId
         ? workItemHref(selectedItemId, params)
@@ -355,23 +446,27 @@ export function WorkDashboardView({
         )}
       </WorkBoardToolbar>
 
-      {error && (
+      {error != null && (
         <p className="py-8 text-center text-destructive">
           Failed to load work items.
         </p>
       )}
+      {boardView && board.pageError != null && (
+        <p className="text-destructive text-sm">Failed to load more items.</p>
+      )}
 
-      {!error && boardView && (
+      {error == null && boardView && (
         <WorkBoardView
           table={table}
-          visibleStatuses={visibleStatuses}
+          columns={board.columns}
           isLoading={isLoading}
           onOpenItem={openItem}
+          onLoadMore={board.loadMore}
           renderGoalLink={WorkGoalLink}
         />
       )}
 
-      {!error && !boardView && (
+      {error == null && !boardView && (
         <DataGrid
           table={table}
           recordCount={items.length}
@@ -387,14 +482,79 @@ export function WorkDashboardView({
           tableClassNames={{
             bodyRow: "cursor-pointer",
           }}
-          emptyMessage="No work items found."
+          emptyMessage={tableEmptyMessage}
         >
           <DataGridContainer className="overflow-x-auto">
             <DataGridTable />
           </DataGridContainer>
-          <DataGridPagination sizes={[25, 50, 100]} />
         </DataGrid>
       )}
+
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        {boardView ? (
+          <span>
+            {items.length} cards loaded
+            {board.columns.some((column) => column.hasMore)
+              ? " · more in columns marked +"
+              : ""}
+          </span>
+        ) : (
+          <>
+            <span>{items.length} items on this page</span>
+            <div className="flex flex-wrap gap-2">
+              <Select
+                value={String(tablePage.pageSize)}
+                onValueChange={(value) => {
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.set("pageSize", String(clampWorkPageSize(value)));
+                  params.delete("cursor");
+                  router.replace(
+                    selectedItemId
+                      ? workItemHref(selectedItemId, params)
+                      : workListHref(params),
+                    { scroll: false }
+                  );
+                }}
+              >
+                <SelectTrigger aria-label="Items per page" className="w-20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {WORK_TABLE_PAGE_SIZES.map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => changePage("restart")}
+                disabled={!cursor}
+              >
+                Restart
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => changePage("previous")}
+                disabled={!cursor || history.length === 0}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => changePage("next")}
+                disabled={!tablePage.nextCursor}
+              >
+                Next
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
 
       <WorkItemDetail
         item={selectedItemQuery.data ?? null}
