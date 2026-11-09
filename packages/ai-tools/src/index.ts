@@ -388,8 +388,12 @@ export type {
 // Shared evaluation facade; sovereign tools and runtime helpers remain local.
 export {
   createGoalListImplementation,
+  createWorkItemReadImplementation,
   GOAL_LIST_NAME,
   goalListBoundTool,
   goalListContract,
+  WORK_ITEM_READ_NAME,
   WorkItemPatchConflictError,
+  workItemReadBoundTool,
+  workItemReadContract,
 } from "@cogni/shared-ai-tools";
