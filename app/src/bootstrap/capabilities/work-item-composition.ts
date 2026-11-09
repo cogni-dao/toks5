@@ -23,6 +23,7 @@ export function composeWorkItemContent(
     "get" | "list" | "claim" | "heartbeat" | "release" | "delete"
   >
 ): WorkItemsDoltgresPort {
+  const { history } = content;
   const refresh = async (item: WorkItem): Promise<WorkItem> => {
     const current = await content.get(item.id);
     if (!current) throw new Error(`Work item not found: ${item.id}`);
@@ -45,6 +46,8 @@ export function composeWorkItemContent(
         ),
       };
     },
+    listSummaries: (query) => content.listSummaries(query),
+    ...(history && { history: (id) => history.call(content, id) }),
     create: (input, principal) => content.create(input, principal),
     patch: async (input, principal) =>
       withClaim(

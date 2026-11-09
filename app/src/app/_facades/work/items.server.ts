@@ -381,6 +381,7 @@ export async function patchWorkItem(
       {
         id: toWorkItemId(input.id),
         set: dropUndefined(input.set),
+        ...(input.reason !== undefined && { reason: input.reason }),
         ...(input.expectedRevision !== undefined && {
           expectedRevision: input.expectedRevision,
         }),

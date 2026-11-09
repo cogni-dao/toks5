@@ -61,5 +61,13 @@ describe("GET /.well-known/agent.json", () => {
     expect(body.actions.heartbeatWorkItem.method).toBe("POST");
     expect(body.actions.releaseWorkItem.method).toBe("DELETE");
     expect(body.actions.getWorkItemCoordination.method).toBe("GET");
+    expect(body.actions.getWorkItemHistory).toMatchObject({
+      method: "GET",
+      endpoint: "https://node.example/api/v1/work/items/{id}/history",
+    });
+    expect(body.actions.getKnowledgeHistory).toMatchObject({
+      method: "GET",
+      endpoint: "https://node.example/api/v1/knowledge/{id}/history",
+    });
   });
 });

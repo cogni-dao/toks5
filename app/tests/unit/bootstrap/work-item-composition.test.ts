@@ -46,6 +46,11 @@ function setup() {
       items: [item],
       pageInfo: { endCursor: null, hasMore: false },
     }),
+    listSummaries: vi.fn().mockResolvedValue({
+      items: [],
+      pageInfo: { endCursor: null, hasMore: false },
+    }),
+    history: vi.fn().mockResolvedValue([]),
     create: vi.fn(),
     patch: vi.fn().mockResolvedValue(item),
     delete: vi.fn(),
@@ -119,5 +124,24 @@ describe("TOKS5 shared content / legacy v1 composition", () => {
     await port.delete(item.id, "creator");
     expect(legacy.delete).toHaveBeenCalledWith(item.id, "creator");
     expect(content.delete).not.toHaveBeenCalled();
+  });
+  it("forwards listSummaries, history and the change reason to the content port", async () => {
+    const { content, port } = setup();
+    await port.listSummaries({ limit: 5 });
+    expect(content.listSummaries).toHaveBeenCalledWith({ limit: 5 });
+    await port.history?.(item.id);
+    expect(content.history).toHaveBeenCalledWith(item.id);
+    const patch = { id: item.id, reason: "why", set: { title: "t" } };
+    await port.patch(patch, "collaborator");
+    expect(content.patch).toHaveBeenCalledWith(patch, "collaborator");
+  });
+  it("omits history when the content port has none", () => {
+    const { content, legacy } = setup();
+    const { history: _history, ...noHistory } = content;
+    const port = composeWorkItemContent(
+      noHistory as WorkItemsContentPort,
+      legacy
+    );
+    expect(port.history).toBeUndefined();
   });
 });
