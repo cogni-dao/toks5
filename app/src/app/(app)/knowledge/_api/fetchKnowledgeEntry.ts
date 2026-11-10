@@ -10,9 +10,16 @@
  * @internal
  */
 
+import type { MetricService } from "@cogni-dao/metrics";
 import type { KnowledgeRow } from "@cogni/node-contracts";
 
-export async function fetchKnowledgeEntry(id: string): Promise<KnowledgeRow> {
+type KnowledgeEntryWithKpis = KnowledgeRow & {
+  kpis?: Awaited<ReturnType<MetricService["bindings"]>>;
+};
+
+export async function fetchKnowledgeEntry(
+  id: string
+): Promise<KnowledgeEntryWithKpis> {
   const response = await fetch(`/api/v1/knowledge/${encodeURIComponent(id)}`, {
     method: "GET",
     headers: { "Content-Type": "application/json" },
@@ -25,5 +32,5 @@ export async function fetchKnowledgeEntry(id: string): Promise<KnowledgeRow> {
     }));
     throw new Error(error.error || `HTTP ${response.status}`);
   }
-  return response.json() as Promise<KnowledgeRow>;
+  return response.json() as Promise<KnowledgeEntryWithKpis>;
 }

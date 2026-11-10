@@ -19,6 +19,7 @@ import Link from "next/link";
 
 import { fetchKnowledgeEntry } from "../_api/fetchKnowledgeEntry";
 import { CopyLinkButton } from "./CopyLinkButton";
+import { KnowledgeGoalsBoard, KnowledgeMetricEvidence } from "./GoalsMount";
 import { KnowledgeEntryFields } from "./KnowledgeEntryFields";
 
 export function KnowledgeEntryView({ id }: { readonly id: string }) {
@@ -80,6 +81,11 @@ export function KnowledgeEntryView({ id }: { readonly id: string }) {
               />
             </div>
           </div>
+
+          {query.data.entryType === "goal" && (
+            <KnowledgeGoalsBoard goalId={query.data.id} />
+          )}
+          {query.data.metricSpec && <KnowledgeMetricEvidence id={query.data.id} />}
 
           <div className="mt-2">
             <KnowledgeEntryFields item={query.data} />

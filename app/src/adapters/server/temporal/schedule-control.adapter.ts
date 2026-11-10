@@ -50,6 +50,9 @@ export interface TemporalScheduleControlConfig {
 /** Workflow type name for unified graph execution (defined in scheduler-temporal-worker) */
 const GRAPH_RUN_WORKFLOW_TYPE = "GraphRunWorkflow";
 
+/** Workflow type for node-owned internal route dispatch (scheduler worker). */
+const NODE_TASK_WORKFLOW_TYPE = "NodeTaskWorkflow";
+
 /** Map port-level overlap hint to Temporal SDK enum */
 function toTemporalOverlapPolicy(
   hint: ScheduleOverlapPolicyHint | undefined
@@ -62,6 +65,41 @@ function toTemporalOverlapPolicy(
     default:
       return ScheduleOverlapPolicy.BUFFER_ONE;
   }
+}
+
+/**
+ * Route tasks use the NodeTaskWorkflow payload ({nodeId, route, payload,
+ * scheduleId, executionGrantId}); graph-run schedules keep their exact shape.
+ * Only `task:/api/internal/` routes may be scheduled as node tasks.
+ */
+export function scheduleArgs(params: CreateScheduleParams) {
+  if (params.workflowType === NODE_TASK_WORKFLOW_TYPE) {
+    if (
+      !params.graphId.startsWith("task:/api/internal/") ||
+      params.graphId.includes("..") ||
+      params.graphId.includes("?")
+    )
+      throw new Error("invalid_task_route");
+    return {
+      nodeId: params.nodeId,
+      route: params.graphId.slice("task:".length),
+      payload: params.input,
+      scheduleId: params.scheduleId,
+      executionGrantId: params.executionGrantId,
+    };
+  }
+  return {
+    nodeId: params.nodeId,
+    graphId: params.graphId,
+    executionGrantId: params.executionGrantId,
+    input: params.input,
+    runKind: "system_scheduled" as const,
+    triggerSource: "temporal_schedule",
+    triggerRef: params.scheduleId,
+    requestedBy: params.ownerUserId,
+    dbScheduleId: params.dbScheduleId ?? null,
+    temporalScheduleId: params.scheduleId,
+  };
 }
 
 /**
@@ -132,20 +170,7 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
           // Per WORKFLOW_ID_INCLUDES_TIMESTAMP: workflowId includes schedule time
           // Temporal appends timestamp automatically for scheduled workflows
           workflowId: params.scheduleId,
-          args: [
-            {
-              nodeId: params.nodeId,
-              graphId: params.graphId,
-              executionGrantId: params.executionGrantId,
-              input: params.input,
-              runKind: "system_scheduled" as const,
-              triggerSource: "temporal_schedule",
-              triggerRef: params.scheduleId,
-              requestedBy: params.ownerUserId,
-              dbScheduleId: params.dbScheduleId ?? null,
-              temporalScheduleId: params.scheduleId,
-            },
-          ],
+          args: [scheduleArgs(params)],
           taskQueue: params.taskQueueOverride ?? this.config.taskQueue,
         },
         policies: {
@@ -236,20 +261,7 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
           type: "startWorkflow" as const,
           workflowType: params.workflowType ?? GRAPH_RUN_WORKFLOW_TYPE,
           workflowId: params.scheduleId,
-          args: [
-            {
-              nodeId: params.nodeId,
-              graphId: params.graphId,
-              executionGrantId: params.executionGrantId,
-              input: params.input,
-              runKind: "system_scheduled" as const,
-              triggerSource: "temporal_schedule",
-              triggerRef: params.scheduleId,
-              requestedBy: params.ownerUserId,
-              dbScheduleId: params.dbScheduleId ?? null,
-              temporalScheduleId: params.scheduleId,
-            },
-          ],
+          args: [scheduleArgs(params)],
           taskQueue: params.taskQueueOverride ?? this.config.taskQueue,
         },
         policies: {

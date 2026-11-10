@@ -37,6 +37,11 @@ export const BRAIN_TOOL_IDS = [
   REPO_OPEN_NAME,
   SCHEDULE_LIST_NAME,
   SCHEDULE_MANAGE_NAME,
+  // Goal KPIs: read the node's computed goal progress; never estimate a KPI.
+  "core__goal_progress",
+  "core__metric_list",
+  "core__metric_read",
+  "core__metric_history",
 ] as const;
 
 /**

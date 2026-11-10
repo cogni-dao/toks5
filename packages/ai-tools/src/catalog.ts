@@ -114,6 +114,13 @@ function sharedTool(id: string): CatalogBoundTool {
 }
 
 export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
+  // Goal KPIs: contracts from the published ai-tools release; bindings come
+  // from bootstrap (createMetricTools over the node's goalMetrics service).
+  sharedTool("core__goal_progress"),
+  sharedTool("core__metric_list"),
+  sharedTool("core__metric_read"),
+  sharedTool("core__metric_history"),
+  sharedTool("core__metric_compute"),
   edoDecideBoundTool as CatalogBoundTool,
   edoHypothesizeBoundTool as CatalogBoundTool,
   edoRecordOutcomeBoundTool as CatalogBoundTool,

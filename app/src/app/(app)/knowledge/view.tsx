@@ -19,6 +19,7 @@
 
 "use client";
 
+import { attentionCount } from "@cogni/knowledge-base-ui/goals";
 import type {
   ContributionRecord,
   DomainRow,
@@ -34,6 +35,7 @@ import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data
 import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
 import { Skeleton } from "@cogni/node-ui-kit/shadcn/skeleton";
+import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -55,6 +57,7 @@ import {
   Plus,
   Settings2,
   Tags,
+  Target,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
@@ -72,10 +75,15 @@ import { ContributionDetail } from "./_components/ContributionDetail";
 import { knowledgeColumns } from "./_components/columns";
 import { buildContributionColumns } from "./_components/contribution-columns";
 import { domainColumns } from "./_components/domain-columns";
+import {
+  KnowledgeGoalsBoard,
+  KnowledgeGoalsProvider,
+  useKnowledgeGoalsBadge,
+} from "./_components/GoalsMount";
 import { GraphView } from "./_components/GraphView";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
 
-type ViewMode = "browse" | "domains" | "inbox" | "chains" | "graph";
+type ViewMode = "browse" | "domains" | "inbox" | "chains" | "graph" | "goals";
 
 const EDO_ENTRY_TYPES: ReadonlySet<string> = new Set([
   "hypothesis",
@@ -90,7 +98,8 @@ function isMode(v: string | null): v is ViewMode {
     v === "domains" ||
     v === "inbox" ||
     v === "chains" ||
-    v === "graph"
+    v === "graph" ||
+    v === "goals"
   );
 }
 
@@ -105,13 +114,27 @@ interface KnowledgeDashboardViewProps {
   readonly initialDomains?: DomainsListResponse | undefined;
   /** SSR-seeded graph — only present on a `?mode=graph` deep-link. */
   readonly initialGraph?: KnowledgeGraphResponse | undefined;
+  /** SSR-seeded goal progress — only present on a `?mode=goals` deep-link. */
+  readonly initialGoals?: GoalsProgress | undefined;
 }
 
-export function KnowledgeDashboardView({
+/** One Goals host for the tab badge and the board, so both read one cache entry. */
+export function KnowledgeDashboardView(
+  props: KnowledgeDashboardViewProps = {}
+) {
+  return (
+    <KnowledgeGoalsProvider>
+      <KnowledgeDashboard {...props} />
+    </KnowledgeGoalsProvider>
+  );
+}
+
+function KnowledgeDashboard({
   initialList,
   initialDomains,
   initialGraph,
-}: KnowledgeDashboardViewProps = {}) {
+  initialGoals,
+}: KnowledgeDashboardViewProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -154,6 +177,13 @@ export function KnowledgeDashboardView({
   });
 
   const openCount = contributionsQuery.data?.contributions.length ?? 0;
+
+  // One read feeds the Goals tab badge. Polling lives in GoalsBoard, which is
+  // mounted only while the Goals tab is selected.
+  const goalsQuery = useKnowledgeGoalsBadge({ initialData: initialGoals });
+  const goalsAttention = goalsQuery.data
+    ? attentionCount(goalsQuery.data.goals)
+    : 0;
 
   // A failed merge used to be swallowed — the button flipped back with zero
   // feedback and the contribution stayed open (bug.5120). Surface it INLINE on
@@ -235,6 +265,13 @@ export function KnowledgeDashboardView({
               icon={<GitBranch className="size-3.5" />}
             />
             <ModeButton
+              active={mode === "goals"}
+              onClick={() => setModeUrl("goals")}
+              label="Goals"
+              icon={<Target className="size-3.5" />}
+              {...(goalsAttention > 0 ? { badge: goalsAttention } : {})}
+            />
+            <ModeButton
               active={mode === "domains"}
               onClick={() => setModeUrl("domains")}
               label="Domains"
@@ -275,6 +312,7 @@ export function KnowledgeDashboardView({
           initialData={initialGraph}
         />
       )}
+      {mode === "goals" && <KnowledgeGoalsBoard initialData={initialGoals} />}
       {mode === "domains" && (
         <DomainsPanel
           rows={domainsQuery.data?.domains ?? []}

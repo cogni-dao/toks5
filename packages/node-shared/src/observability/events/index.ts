@@ -12,13 +12,13 @@
  * @public
  */
 
-// ============================================================================
-// Event Name Registry (as const)
-// ============================================================================
-
+// =====================================================================// Event Name Registry (as const)
+// =====================================================================
 export const EVENT_NAMES = {
 	// Bounded work reads (task.0056): one terminal event per /work/summaries or /work/board request.
 	WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
+	METRIC_REFRESH_COMPLETE: "metric.refresh_complete",
+	GOALS_PROGRESS_READ: "goals.progress_read",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",
 	AI_LLM_CALL: "ai.llm_call",
@@ -195,10 +195,8 @@ export const EVENT_NAMES = {
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
 
-// ============================================================================
-// Base Field Enforcement (for logEvent() helper)
-// ============================================================================
-
+// =====================================================================// Base Field Enforcement (for logEvent() helper)
+// =====================================================================
 /**
  * Required base fields for all events.
  * reqId is ALWAYS required; routeId required for HTTP request events.

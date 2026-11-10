@@ -108,6 +108,14 @@ vi.mock("@/app/(app)/knowledge/_components/AddDomainSheet", () => ({
 vi.mock("@/app/(app)/knowledge/_components/ConfidenceBar", () => ({
   ConfidenceBar: () => null,
 }));
+// This suite owns atom selection; automatic goal polling has its own evidence.
+vi.mock("@cogni/knowledge-base-ui/goals", () => ({
+  GoalsBoard: () => null,
+  GoalsProvider: ({ children }: { children: ReactNode }) => children,
+  MetricEvidence: () => null,
+  useGoalsProgress: () => ({ data: undefined }),
+  attentionCount: () => 0,
+}));
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => (
     <a href={href}>{children}</a>
