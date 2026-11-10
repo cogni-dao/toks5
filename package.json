@@ -43,6 +43,6 @@
     "yaml": "^2.8.3",
     "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.7.0/cogni-dao-metrics-0.7.0.tgz",
     "@cogni/ai-tools": "workspace:*",
-    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.0/cogni-dao-work-items-0.7.0.tgz"
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz"
   }
 }
