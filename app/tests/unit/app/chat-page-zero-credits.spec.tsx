@@ -58,7 +58,9 @@ vi.mock("@/features/ai/chat/providers/ChatRuntimeProvider.client", () => ({
   ),
 }));
 
-vi.mock("@/components", () => ({
+vi.mock("@/components", async () => ({
+  BrainLoading: (await import("@/components/kit/feedback/BrainLoading"))
+    .BrainLoading,
   Button: (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
     <button {...props} />
   ),
