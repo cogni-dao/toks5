@@ -79,7 +79,7 @@ function setup() {
 }
 describe("TOKS5 shared content / legacy v1 composition", () => {
   it("overlays only claim fields, preserving primary score content and revision", async () => {
-    const { port } = setup();
+    const { legacy, port } = setup();
     expect(await port.get(item.id)).toEqual({
       ...item,
       claimedByRun: "run-a",
@@ -92,6 +92,8 @@ describe("TOKS5 shared content / legacy v1 composition", () => {
       scores: item.scores,
       claimedByRun: "run-a",
     });
+    // BOUNDED_CLAIM_OVERLAY (task.0056): the overlay reads exactly the page's ids.
+    expect(legacy.list).toHaveBeenCalledWith({ ids: [item.id], limit: 1 });
   });
   it("preserves lease inputs/fences and DELETE while CAS reaches only new content", async () => {
     const { content, legacy, port } = setup();
@@ -127,13 +129,33 @@ describe("TOKS5 shared content / legacy v1 composition", () => {
   });
   it("forwards listSummaries, history and the change reason to the content port", async () => {
     const { content, port } = setup();
-    await port.listSummaries({ limit: 5 });
-    expect(content.listSummaries).toHaveBeenCalledWith({ limit: 5 });
+    const options = { maxScanRows: 10 };
+    await port.listSummaries({ limit: 5 }, options);
+    expect(content.listSummaries).toHaveBeenCalledWith({ limit: 5 }, options);
     await port.history?.(item.id);
     expect(content.history).toHaveBeenCalledWith(item.id);
     const patch = { id: item.id, reason: "why", set: { title: "t" } };
     await port.patch(patch, "collaborator");
     expect(content.patch).toHaveBeenCalledWith(patch, "collaborator");
+  });
+  it("forwards the composed board read with its bounds, and omits it when absent (task.0056)", async () => {
+    const { content, legacy } = setup();
+    const pages = { columns: [], queryCount: 1 };
+    const listBoardColumns = vi.fn().mockResolvedValue(pages);
+    const port = composeWorkItemContent(
+      { ...content, listBoardColumns } as WorkItemsContentPort,
+      legacy
+    );
+    const signal = new AbortController().signal;
+    await expect(
+      port.listBoardColumns?.({}, ["done"], 20, { signal })
+    ).resolves.toBe(pages);
+    expect(listBoardColumns).toHaveBeenCalledWith({}, ["done"], 20, { signal });
+    expect(legacy.list).not.toHaveBeenCalled();
+    expect(
+      composeWorkItemContent(content as WorkItemsContentPort, legacy)
+        .listBoardColumns
+    ).toBeUndefined();
   });
   it("omits history when the content port has none", () => {
     const { content, legacy } = setup();

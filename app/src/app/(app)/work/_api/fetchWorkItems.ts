@@ -3,15 +3,21 @@
 
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems`
- * Purpose: Client-side fetch wrapper for work items list.
- * Scope: Calls /api/v1/work/items with type-safe contract. Does not implement business logic.
- * Invariants: Returns typed WorkItemsListOutput or throws
+ * Purpose: Client-side fetch wrappers for bounded work summary pages, the work board, and item detail.
+ * Scope: Calls summary, board and detail endpoints with type-safe contracts. Does not implement business logic.
+ * Invariants:
+ *   - Returns typed summary pages, board columns or details, or throws `WorkItemFetchError` carrying the HTTP status (the package hooks retry only 5xx and network failures)
+ *   - BOUNDED_BOARD_READS: the only list reads are one `/work/summaries` page (table) and one `/work/board` request plus single column pages; nothing here walks cursors (task.0056)
  * Side-effects: IO
  * Links: [work.items.list.v1.contract](../../../../contracts/work.items.list.v1.contract.ts)
  * @internal
  */
 
-import type { WorkItemDto, WorkItemsListOutput } from "@cogni/node-contracts";
+import type {
+  WorkItemDto,
+  WorkItemSummariesListOutput,
+} from "@cogni/node-contracts";
+import type { WorkBoardColumns } from "@cogni/work-items";
 
 export class WorkItemFetchError extends Error {
   readonly status: number;
@@ -45,46 +51,51 @@ async function responseErrorMessage(
   return fallback;
 }
 
-export async function fetchWorkItems(): Promise<WorkItemsListOutput> {
-  const items: WorkItemDto[] = [];
-  const seen = new Set<string>();
-  const itemIds = new Set<string>();
-  let cursor: string | undefined;
-  do {
-    const params = new URLSearchParams({
-      limit: "500",
-      ...(cursor && { cursor }),
-    });
-    const response = await fetch(`/api/v1/work/items?${params}`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-    if (!response.ok)
-      throw new Error(
-        await responseErrorMessage(response, `HTTP ${response.status}`)
-      );
-    const page = (await response.json()) as WorkItemsListOutput;
-    for (const item of page.items) {
-      if (!itemIds.has(item.id)) {
-        itemIds.add(item.id);
-        items.push(item);
-      }
-    }
-    cursor = page.nextCursor ?? page.pageInfo?.endCursor ?? undefined;
-    if (page.pageInfo?.hasMore && !cursor)
-      throw new Error("Work item page is missing its cursor");
-    if (cursor && seen.has(cursor))
-      throw new Error("Work item cursor did not advance");
-    if (cursor) seen.add(cursor);
-  } while (cursor);
-  return { items, pageInfo: { endCursor: null, hasMore: false } };
+/** Fetch one bounded server-filtered summary page. */
+export async function fetchWorkItems(
+  params: URLSearchParams,
+  signal?: AbortSignal
+): Promise<WorkItemSummariesListOutput> {
+  const response = await fetch(`/api/v1/work/summaries?${params}`, {
+    method: "GET",
+    ...(signal && { signal }),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok)
+    throw new WorkItemFetchError(
+      await responseErrorMessage(response, `HTTP ${response.status}`),
+      response.status
+    );
+  return response.json() as Promise<WorkItemSummariesListOutput>;
 }
 
-export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
+/** Fetch the first page of every visible board column in one request. */
+export async function fetchWorkBoard(
+  params: URLSearchParams,
+  signal?: AbortSignal
+): Promise<WorkBoardColumns> {
+  const response = await fetch(`/api/v1/work/board?${params}`, {
+    method: "GET",
+    ...(signal && { signal }),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok)
+    throw new WorkItemFetchError(
+      await responseErrorMessage(response, `HTTP ${response.status}`),
+      response.status
+    );
+  return response.json() as Promise<WorkBoardColumns>;
+}
+
+export async function fetchWorkItem(
+  id: string,
+  signal?: AbortSignal
+): Promise<WorkItemDto> {
   const response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
     method: "GET",
+    ...(signal && { signal }),
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     cache: "no-store",
