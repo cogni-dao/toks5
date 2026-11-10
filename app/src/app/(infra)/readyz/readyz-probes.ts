@@ -96,6 +96,65 @@ export async function runDeepChecks(
   });
 }
 
+/** Default-path budget for the system-tenant DB check; exceeding it reports degraded (non-fatal). */
+export const SYSTEM_TENANT_BUDGET_MS = 2000;
+
+/**
+ * Default-path system-tenant check: NON-FATAL (bug.0022). A k8s readiness probe
+ * must not hard-gate on a shared DB: a Postgres blip would drain every pod from
+ * its Service at once. Provisioning (a missing cogni_system tenant) is asserted
+ * once at process boot instead (`bootstrap/startup-assertions`), so a pod that
+ * is genuinely unprovisioned crash-loops rather than serving.
+ *
+ * Any rejection of `verifySystemTenant` (query error, missing account, budget
+ * exceeded) becomes `"degraded"` plus a stable critical log, never a throw. The
+ * deep probe does not use this: it calls `verifySystemTenant` directly and
+ * still 503s with `postgres` in `unreachable`.
+ */
+export async function checkSystemTenantNonFatal(
+  ctx: RequestContext,
+  serviceAccountService: Parameters<typeof verifySystemTenant>[0]
+): Promise<"ok" | "degraded"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const budget = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new InfraConnectivityError(
+              `System tenant check exceeded ${SYSTEM_TENANT_BUDGET_MS}ms budget`
+            )
+          ),
+        SYSTEM_TENANT_BUDGET_MS
+      );
+    });
+    await Promise.race([verifySystemTenant(serviceAccountService), budget]);
+    return "ok";
+  } catch (error) {
+    // pg/drizzle errors wrap the driver error (with its SQLSTATE `code`) in `cause`.
+    const cause = (error as { cause?: { code?: unknown; message?: unknown } })
+      .cause;
+    ctx.log.error(
+      {
+        event: "substrate.postgres.unreachable",
+        severity: "critical",
+        reason:
+          error instanceof InfraConnectivityError
+            ? error.code
+            : "SYSTEM_TENANT_CHECK_FAILED",
+        dependency: "postgres",
+        message: error instanceof Error ? error.message : String(error),
+        causeCode: cause?.code,
+        causeMessage: cause?.message,
+      },
+      "readiness: postgres system-tenant check failed — shared DB down or unprovisioned. Returning ready: probe stays non-fatal so the fleet is not drained; provisioning is asserted at boot and the critical alert covers the outage."
+    );
+    return "degraded";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * EVM RPC deep check: forced live read, fatal on failure. The default probe path
  * keeps its own non-fatal EVM check inline in `route.ts`.

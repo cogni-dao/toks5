@@ -159,6 +159,7 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
+import { startSystemTenantAssertionOnBoot } from "@/bootstrap/startup-assertions";
 import type {
 	AccountService,
 	AiTelemetryPort,
@@ -348,6 +349,8 @@ let _workflowClientPromise: Promise<{
 export function getContainer(): Container {
 	if (!_container) {
 		_container = createContainer();
+		// bug.0022: provisioning is asserted once at boot (fail the pod), not on /readyz.
+		void startSystemTenantAssertionOnBoot(_container.serviceAccountService);
 		// Dynamic import avoids a static container/job cycle.
 		if (_container.goalMetrics)
 			void import("@/bootstrap/jobs/metrics-refresh.job").then((job) =>
