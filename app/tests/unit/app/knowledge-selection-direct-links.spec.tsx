@@ -117,8 +117,14 @@ vi.mock("@cogni/knowledge-base-ui/goals", () => ({
   attentionCount: () => 0,
 }));
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: ReactNode }) => (
-    <a href={href}>{children}</a>
+  default: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: ReactNode } & Record<string, unknown>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   ),
 }));
 vi.mock("@/components", () => ({
@@ -172,6 +178,8 @@ function relation(index: number) {
       href: `/knowledge/neighbor-${index}`,
     },
     context: null,
+    label: "supports",
+    tone: "positive",
   };
 }
 
@@ -238,9 +246,9 @@ describe("toks5 knowledge selection", () => {
       })
     );
     await screen.findByText(selected.content);
-    await screen.findByRole("link", { name: "supports Direct relation 4" });
+    await screen.findByRole("link", { name: "outgoing supports neighbor-4" });
     expect(
-      screen.queryByRole("link", { name: "supports Direct relation 5" })
+      screen.queryByRole("link", { name: "outgoing supports neighbor-5" })
     ).toBeNull();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       contributions,
@@ -248,7 +256,7 @@ describe("toks5 knowledge selection", () => {
     ]);
 
     fireEvent.click(screen.getByRole("button", { name: "More links" }));
-    await screen.findByRole("link", { name: "supports Direct relation 5" });
+    await screen.findByRole("link", { name: "outgoing supports neighbor-5" });
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       contributions,
       first,
