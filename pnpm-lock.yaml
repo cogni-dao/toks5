@@ -20,6 +20,9 @@ importers:
       '@cogni/ai-tools':
         specifier: workspace:*
         version: link:packages/ai-tools
+      '@cogni/node-declarations':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz
+        version: '@cogni-dao/node-declarations@https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz'
       '@cogni/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz
         version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz'
@@ -1374,6 +1377,11 @@ packages:
     peerDependenciesMeta:
       react:
         optional: true
+
+  '@cogni-dao/node-declarations@https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz}
+    version: 0.1.0
+    hasBin: true
 
   '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz}
@@ -9653,6 +9661,11 @@ snapshots:
   '@cogni-dao/money-plane@https://github.com/cogni-dao/node-template/releases/download/money-plane-v0.2.0/cogni-dao-money-plane-0.2.0.tgz(react@19.0.0)':
     optionalDependencies:
       react: 19.0.0
+
+  '@cogni-dao/node-declarations@https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz':
+    dependencies:
+      yaml: 2.9.0
+      zod: 3.25.76
 
   '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz(postgres@3.4.9)':
     dependencies:
