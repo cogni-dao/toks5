@@ -26,7 +26,7 @@ import type {
 } from "@cogni/node-contracts";
 import { type ReactElement, useEffect, useRef, useState } from "react";
 
-import { CitationNavLink } from "../../_components/CitationNavLink";
+import { PeekLink } from "../../_components/EntityPeek";
 import { HtmlRenderer } from "./HtmlRenderer";
 
 /** True when any diff row is an `html` entry (callers widen the layout). */
@@ -147,13 +147,13 @@ export function ContributionDiff({
                   {d.changeType}
                 </span>
               )}
-              <CitationNavLink
+              <PeekLink
                 href={citationHref(change.rowId)}
                 entityId={change.rowId}
                 className="font-mono text-muted-foreground hover:text-foreground hover:underline"
               >
                 {change.rowId}
-              </CitationNavLink>
+              </PeekLink>
               {row?.domain && (
                 <span className="inline-flex rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-primary text-xs">
                   {row.domain}
@@ -207,7 +207,7 @@ export function ContributionDiff({
               edges={change.edges}
               entryId={change.rowId}
               hrefFor={citationHref}
-              LinkComponent={CitationNavLink}
+              LinkComponent={PeekLink}
               className="mt-1"
             />
           </div>
