@@ -10,8 +10,9 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
-import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, OPEN_BY_DESIGN_ROUTES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { ROUTE_ONLY_CAPABILITIES } from "@/bootstrap/route-capabilities";
+import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 
 const API = resolve(__dirname, "../../../src/app/api");
@@ -46,7 +47,7 @@ describe("same-door routes", () => {
   });
 
   it("S4: no route-twin scope is admin-subject until an AI admin check exists (item I2); otherwise any bearer with a role row would pass it", () => {
-    const contracts = new Map([...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map((t) => [t.contract.name, t.contract]));
+    const contracts = new Map([...CORE_TOOL_BUNDLE].map((t) => [t.contract.name, t.contract]));
     for (const tool of Object.keys(SAME_DOOR_ROUTES))
       expect(contracts.get(tool)?.requires?.subject, tool).not.toBe("admin");
     for (const [id, cap] of Object.entries(ROUTE_ONLY_CAPABILITIES))

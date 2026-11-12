@@ -16,11 +16,8 @@
  */
 
 import type { CatalogBoundTool } from "@cogni/ai-tools";
-import {
-  ROUTE_ONLY_CAPABILITIES,
-  SAME_DOOR_ROUTES,
-  type ToolRequires,
-} from "@cogni/agent-grants";
+import { SAME_DOOR_ROUTES, type ToolRequires } from "@cogni/agent-grants";
+import { ROUTE_ONLY_CAPABILITIES } from "./route-capabilities";
 
 export interface PermissionDeclaration {
   readonly label?: string | undefined;
