@@ -92,7 +92,7 @@ import {
 	Connection as TemporalConnection,
 	type WorkflowClient,
 } from "@temporalio/client";
-import Redis from "ioredis";
+import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import type { Logger } from "pino";
 import {
 	ALCHEMY_ADAPTER_VERSION,
@@ -159,7 +159,7 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
-import { startSystemTenantAssertionOnBoot } from "@/bootstrap/startup-assertions";
+import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
 import type {
 	AccountService,
 	AiTelemetryPort,
@@ -349,8 +349,6 @@ let _workflowClientPromise: Promise<{
 export function getContainer(): Container {
 	if (!_container) {
 		_container = createContainer();
-		// bug.0022: provisioning is asserted once at boot (fail the pod), not on /readyz.
-		void startSystemTenantAssertionOnBoot(_container.serviceAccountService);
 		// Dynamic import avoids a static container/job cycle.
 		if (_container.goalMetrics)
 			void import("@/bootstrap/jobs/metrics-refresh.job").then((job) =>
@@ -515,7 +513,7 @@ export async function finalizeEpochInProcess(
 }
 
 function createContainer(): Container {
-	const env = serverEnv();
+	const env = localReadinessPreflight();
 	const nodeId = getNodeId();
 	const db = getAppDb();
 	const log = makeLogger({ service: "cogni-template", nodeId });
@@ -1064,10 +1062,7 @@ function createContainer(): Container {
 
 	// Redis client for run event streaming (ephemeral stream plane)
 	// Per REDIS_IS_STREAM_PLANE: only transient data, no durable state
-	const redisClient = new Redis(env.REDIS_URL, {
-		lazyConnect: true,
-		maxRetriesPerRequest: 3,
-	});
+	const redisClient = createStreamRedisClient(env.REDIS_URL);
 	const runStream = new RedisRunStreamAdapter(redisClient);
 	const nodeStream = new RedisNodeStreamAdapter(redisClient);
 
