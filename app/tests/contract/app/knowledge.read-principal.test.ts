@@ -53,6 +53,16 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
 }));
 
+import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import {
+  type AgentAuthoritySql,
+  createAgentToolAuthority,
+} from "@/bootstrap/agent-authority";
+import { getSessionUser } from "@/app/_lib/auth/session";
+import * as browseHandler from "@/app/api/v1/knowledge/browse/route";
+import * as historyHandler from "@/app/api/v1/knowledge/[id]/history/route";
+import * as indexHandler from "@/app/api/v1/knowledge/index/route";
+import * as domainHandler from "@/app/api/v1/knowledge/domains/[domain]/route";
 import * as entryHandler from "@/app/api/v1/knowledge/[id]/route";
 import * as domainsHandler from "@/app/api/v1/knowledge/domains/route";
 import * as graphHandler from "@/app/api/v1/knowledge/graph/route";
@@ -89,9 +99,31 @@ async function seedStore(store: FakeKnowledgeStoreAdapter) {
   );
 }
 
-describe("knowledge read routes — KNOWLEDGE_READ_REQUIRES_PRINCIPAL", () => {
+function fakeSql(): AgentAuthoritySql {
+  const tag = (async (strings: TemplateStringsArray, ...values: unknown[]) =>
+    strings.join("?").includes("FROM agent_roles") &&
+    grants.roles.has(`${values[0]}|${values[1]}`)
+      ? [{ ok: 1 }]
+      : []) as unknown as AgentAuthoritySql;
+  (tag as unknown as { begin: unknown }).begin = async (
+    fn: (t: unknown) => Promise<unknown>
+  ) => fn(tag);
+  return tag;
+}
+
+describe("knowledge read routes — KNOWLEDGE_READ_NEEDS_GRANT", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    // clearAllMocks keeps the default session user (no `via`: the strict bearer branch).
+    grants.roles = new Set([`${TEST_SESSION_USER_1.id}|knowledge:read`]);
+    const noop = () => undefined;
+    const quiet = { info: noop, warn: noop, error: noop, debug: noop };
+    grants.authority = createAgentToolAuthority({
+      sql: fakeSql(),
+      nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_denied" }) },
+      log: quiet as never,
+      toolBundle: CORE_TOOL_BUNDLE as never,
+    });
     mockStore = new FakeKnowledgeStoreAdapter();
     await seedStore(mockStore);
   });

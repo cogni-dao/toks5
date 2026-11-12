@@ -19,6 +19,7 @@
     "@assistant-ui/react-data-stream": "0.12.4",
     "@assistant-ui/react-markdown": "0.12.3",
     "@auth/drizzle-adapter": "^1.7.0",
+    "@cogni/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.3.0/cogni-dao-agent-grants-0.3.0.tgz",
     "@cogni/ai-core": "workspace:*",
     "@cogni/ai-tools": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
@@ -129,7 +130,7 @@
     "zod": "^4.1.12",
     "zustand": "^5.0.9",
     "@cogni/work-items-legacy": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.1.8/cogni-dao-work-items-0.1.8.tgz",
-    "@cogni/shared-ai-tools": "https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.4.10/cogni-dao-ai-tools-0.4.10.tgz",
+    "@cogni/shared-ai-tools": "https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.6.0/cogni-dao-ai-tools-0.6.0.tgz",
     "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz",
     "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.17.0/cogni-dao-knowledge-store-0.17.0.tgz",
     "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.7.0/cogni-dao-metrics-0.7.0.tgz"

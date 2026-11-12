@@ -7,5 +7,6 @@ export type {
   ToolContract,
   ToolErrorCode,
   ToolImplementation,
+  ToolRequires,
   ToolResult,
 } from "@cogni/shared-ai-tools";
