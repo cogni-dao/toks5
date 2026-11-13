@@ -246,6 +246,20 @@
       "when": 1794521384895,
       "tag": "0034_seed_agent_principals",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1794546560303,
+      "tag": "0035_agent_ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1794546572543,
+      "tag": "0036_agent_personal_grants",
+      "breakpoints": true
     }
   ]
 }
