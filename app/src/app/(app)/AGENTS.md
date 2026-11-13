@@ -30,8 +30,9 @@ Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `A
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/chat`, `/dashboard`, `/work`, `/work/items/[id]`, `/activity`, `/gov`, `/credits`, `/schedules`, `/schedules/[scheduleId]`, `/setup`
+- **Routes:** `/chat`, `/dashboard`, `/work`, `/work/items/[id]`, `/metrics`, `/activity`, `/gov`, `/credits`, `/schedules`, `/schedules/[scheduleId]`, `/setup`
 - BOUNDED_BOARD_READS (task.0056): `/work` and `/dashboard` never download the backlog. The `/work` board makes one `/api/v1/work/board` request plus one `/api/v1/work/summaries` request per column "Load more" through the package `useWorkBoard`; the table requests one cursor page through `useWorkTablePage`; `/dashboard` uses `useOpenWork` (at most 5 active summaries). No client code walks cursors.
+- METRICS_IS_THE_PACKAGE_VIEW (story.0039): `/metrics` renders the published `MetricsBoard` (goals → KPIs → metrics, one `MetricCard`) from `@cogni/knowledge-base-ui/goals` through the node's one Goals host (`_components/goals-host.ts`); the page only seeds one goal read and owns no Metrics markup. `/knowledge?mode=goals` redirects to `/metrics`. Work views mount `WorkGoalsMount` so the Goal column, board pointer and the detail's Moves block read one cached goals read.
 - PEEK_KEEPS_PAGE (bug.0011): citation links in entry Links and inbox cards render through `PeekLink` (`_components/EntityPeek.tsx`). A plain click on a knowledge id opens it in the shell-level side sheet (`EntityPeekProvider` in `layout.tsx`, `knowledge/_components/KnowledgeSelection.tsx`), and links inside the sheet swap its entry. Modified clicks, work-item ids and links outside the provider navigate.
 - **Files considered API:** `layout.tsx`
 

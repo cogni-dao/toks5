@@ -3,27 +3,22 @@
 
 /**
  * Module: `@tests/unit/app/knowledge-goals-tab`
- * Purpose: Prove red's mount of the published Goals capability (story.0021): the Goals tab renders the package board and its badge from one goals read, and the entry page hands `?observation=` to the evidence view. The board, chart and read client themselves are proven in packages/knowledge-base-ui.
+ * Purpose: Prove this node's mounts of the published Goals capability: the Metrics page (story.0039) renders the package board from one goals read, and the entry page hands `?observation=` to the evidence view. The board, chart and read client themselves are proven in packages/knowledge-base-ui.
  * Scope: React Query plus the browser fetch boundary, rendering the real `@cogni/knowledge-base-ui/goals` entry. No live network.
- * Invariants: ONE_CACHE_ENTRY (board and badge share one read).
+ * Invariants: ONE_CACHE_ENTRY (the Metrics page makes one goals read).
  * Side-effects: global (stubbed fetch)
- * Links: app/src/app/(app)/knowledge/view.tsx, app/src/app/(app)/knowledge/_components/GoalsMount.tsx
+ * Links: app/src/app/(app)/metrics/view.tsx, app/src/app/(app)/knowledge/_components/GoalsMount.tsx
  * @vitest-environment jsdom
  * @internal
  */
 
 import { GoalsProgressSchema } from "@cogni-dao/metrics/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  cleanup,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeMetricEvidence } from "@/app/(app)/knowledge/_components/GoalsMount";
-import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
+import { MetricsView } from "@/app/(app)/metrics/view";
 
 const navigation = vi.hoisted(() => ({
   mode: "browse",
@@ -145,30 +140,27 @@ function oneBehindGoal() {
   });
 }
 
-describe("Knowledge Goals tab", () => {
-  it("mounts the package board under one provider, sharing a single goals read with the tab badge", async () => {
-    navigation.mode = "goals";
+describe("Metrics page", () => {
+  it("mounts the package Metrics board under one provider with a single goals read", async () => {
     const data = oneBehindGoal();
     const fetchMock = vi.fn(async (url: string) => {
-      if (url === "/api/v1/metrics/goals") return Response.json(data);
-      if (url.startsWith("/api/v1/knowledge/contributions"))
-        return Response.json({ contributions: [] });
+      if (url.startsWith("/api/v1/metrics/goals")) return Response.json(data);
       return new Promise(() => {});
     });
     vi.stubGlobal("fetch", fetchMock);
     render(
       <QueryClientProvider client={client()}>
-        <KnowledgeDashboardView
-          initialList={{ items: [], domains: [] }}
-          initialDomains={{ domains: [] }}
-        />
+        <MetricsView />
       </QueryClientProvider>
     );
     await screen.findByText("Goal: Ship it");
-    const goals = screen.getByRole("button", { name: /^Goals/ });
-    await waitFor(() => expect(goals.textContent).toContain("1"));
     expect(
-      fetchMock.mock.calls.filter(([url]) => url === "/api/v1/metrics/goals")
+      screen.getByRole("heading", { name: "Metrics" })
+    ).toBeDefined();
+    expect(
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).startsWith("/api/v1/metrics/goals")
+      )
     ).toHaveLength(1);
   });
 });
@@ -222,7 +214,12 @@ describe("Knowledge metric evidence mount", () => {
       </QueryClientProvider>
     );
     await screen.findByText(/Linked immutable evidence/);
-    expect(fetchMock.mock.calls.map(([u]) => u)).toEqual([
+    // The package view may also read the goals for its context; the evidence reads are what this mount owes.
+    expect(
+      fetchMock.mock.calls
+        .map(([u]) => u)
+        .filter((u) => !u.startsWith("/api/v1/metrics/goals"))
+    ).toEqual([
       "/api/v1/metrics/work",
       `/api/v1/metrics/work/observations/${id}`,
     ]);

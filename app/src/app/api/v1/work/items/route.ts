@@ -6,6 +6,7 @@
  * Purpose: HTTP endpoints for listing and creating work items.
  * Scope: Auth-protected GET (list — markdown ∪ node-local Doltgres) and POST (create — node-local Doltgres only).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL.
+ * Moves (story.0033): POST accepts `moves`; an unknown or deprecated new metric id is HTTP400 `cite_unresolved` at `moves`; a baseline failure is HTTP503 `metric_baseline_unavailable`.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract
  * @public
@@ -15,6 +16,7 @@ import {
   workItemsCreateOperation,
   workItemsListOperation,
 } from "@cogni/node-contracts";
+import { workItemWriteErrorResponse } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
 import {
@@ -22,8 +24,6 @@ import {
   InvalidCursorError,
   listWorkItems,
   WorkItemsBackendNotReadyError,
-  WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError,
   NodeAdminRequiredError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -129,25 +129,11 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 201,
       });
     } catch (e) {
-      if (e instanceof WorkItemWriteOutcomeUnknownError)
-        return NextResponse.json(
-          {
-            error: e.message,
-            errorCode: e.code,
-            retryable: false,
-            receipt: e.receipt,
-            operationId: e.operationId,
-            branch: e.branch,
-            commitHash: e.commitHash ?? null,
-            itemId: e.itemId ?? null,
-          },
-          { status: 500 }
-        );
-      if (e instanceof WorkItemScoresInvalidError)
-        return NextResponse.json(
-          { error: "invalid input", errorCode: e.code, issues: e.issues },
-          { status: 400 }
-        );
+      // The package owns every write-contract answer, including a `moves` failure (story.0033).
+      const mapped = workItemWriteErrorResponse(e, "create");
+      if (mapped) {
+        return NextResponse.json(mapped.body, { status: mapped.status });
+      }
       if (e instanceof NodeAdminRequiredError) {
         return NextResponse.json(
           { error: e.message, errorCode: e.errorCode, action: e.action },

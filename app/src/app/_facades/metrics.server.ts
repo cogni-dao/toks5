@@ -34,7 +34,11 @@ export function metricHandlers() {
 export function metricResponse(result: MetricHttpResult): NextResponse {
 	return NextResponse.json(result.body, {
 		status: result.status,
-		headers: METRIC_HTTP_HEADERS,
+		// A 503 here is a read that may finish on its own: tell clients when to retry.
+		headers:
+			result.status === 503
+				? { ...METRIC_HTTP_HEADERS, "Retry-After": "2" }
+				: METRIC_HTTP_HEADERS,
 	});
 }
 
@@ -43,7 +47,7 @@ export function metricHttpError(error: unknown): NextResponse {
 	return metricResponse(metricErrorResult(error, reportUnexpected));
 }
 
-/** Same reader instance as core__goal_progress, for the Knowledge page seed. */
+/** Same reader instance as core__goal_progress, for the Metrics page seed. */
 export async function loadGoalsProgress() {
 	return getContainer().goalProgress();
 }

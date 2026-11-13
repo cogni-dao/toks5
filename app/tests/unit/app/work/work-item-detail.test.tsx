@@ -8,7 +8,9 @@
 import "@testing-library/jest-dom/vitest";
 
 import type { WorkItemDto } from "@cogni/node-contracts";
-import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render as baseRender, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WorkItemFetchError } from "@/app/(app)/work/_api/fetchWorkItems";
@@ -33,8 +35,20 @@ const item: WorkItemDto = {
   updatedAt: "2026-10-03T00:00:00.000Z",
 };
 
+/** The detail's Moves and Expectations blocks read through react-query. */
+function render(ui: ReactElement) {
+  vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return baseRender(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+  );
+}
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
