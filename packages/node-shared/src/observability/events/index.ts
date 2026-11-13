@@ -54,6 +54,8 @@ export const EVENT_NAMES = {
 	AGENT_ROLES_LIST_FAILED: "agent.roles.list_failed",
 	AGENT_ROLES_REFUSED: "agent.roles.refused",
 	/** A human route refused a request that carried an Authorization header; carries one of five fixed scheme names. */
+	/** A node-admin action passed `requireAdminSession()` (ADMIN_ACTS_IN_ADMIN): the action name and the admin's user id. Never a credential. */
+	ADMIN_ACTION: "admin.action",
 	HUMAN_PLANE_REFUSED: "human_plane.refused",
 	AI_CHAT_RECEIVED: "ai.chat_received",
 	AI_CHAT_RESPONSE_STARTED: "ai.chat_response_started",
