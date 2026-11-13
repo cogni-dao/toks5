@@ -89,6 +89,7 @@ import {
 import { columns } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
 import { WorkGoalLink } from "./_components/WorkKanban";
+import { WorkGoalsMount } from "./_components/WorkGoalsMount";
 import {
   closeWorkItemPermalink,
   openWorkItemPermalink,
@@ -135,11 +136,23 @@ function readColumns(params: URLSearchParams): string[] {
     : value.split(",").filter((status) => ALL_STATUSES.includes(status));
 }
 
-export function WorkDashboardView({
-  selectedItemId,
-}: {
+/**
+ * One Goals scope for the table's Goal column, the board's goal pointer and the detail's
+ * Moves block: they read goal titles from one cached goals read, never per row (task.0112).
+ */
+export function WorkDashboardView(props: WorkDashboardProps = {}) {
+  return (
+    <WorkGoalsMount>
+      <WorkDashboard {...props} />
+    </WorkGoalsMount>
+  );
+}
+
+interface WorkDashboardProps {
   readonly selectedItemId?: string;
-} = {}) {
+}
+
+function WorkDashboard({ selectedItemId }: WorkDashboardProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
 

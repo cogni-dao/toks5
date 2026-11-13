@@ -61,6 +61,7 @@ import {
 } from "@cogni/knowledge-store";
 import {
 	buildDoltgresClient,
+	createDoltgresEntryResolver,
 	createDoltgresPusher,
 	DoltBranchSessionRunner,
 	DoltgresEdoResolverAdapter,
@@ -162,6 +163,8 @@ import {
 	type AgentToolAuthority,
 	createAgentToolAuthority,
 } from "@/bootstrap/agent-authority";
+import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
+import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
@@ -725,18 +728,27 @@ function createContainer(): Container {
 	const workItemAdapter = new MarkdownWorkItemAdapter(
 		env.COGNI_REPO_ROOT ?? "/nonexistent",
 	);
+	// story.0033: the work-items `moves` ports over this node's metrics service.
+	// `goalMetrics` and `knowledgeStorePort` are assigned below and read only at call time.
+	const moveMetrics = createMoveMetricPorts(
+		() => goalMetrics,
+		() => knowledgeStorePort,
+	);
 	const workItemCapability = createWorkItemCapability({
 		workItemQuery: workItemAdapter,
 		workItemCommand: workItemAdapter,
+		moveReadings: moveMetrics.readings,
+		// task.0118: first page of an item's citation links, the same read the UI and the route use.
+		links: createCitationLinksPort(() => knowledgeStorePort),
+		log: (event) => log.warn(event, "work.items.envelope_degraded"),
 		// QUERY_READS_THE_LIVE_BACKLOG: the AI query tool (and the prioritizer) reads
 		// this node's Doltgres work items; `doltgresWorkItems` is assigned below and
 		// read only at call time.
-		backlogReader: {
-			get: (id) => doltgresWorkItems.get(id),
-			list: (query) => doltgresWorkItems.list(query),
-		},
+		backlogReader: { list: (query) => doltgresWorkItems.list(query) },
 		backlogWriter: {
-			patch: (input, principal) => doltgresWorkItems.patch(input, principal),
+			store: {
+				patch: (input, principal) => doltgresWorkItems.patch(input, principal),
+			},
 			principalId: () => {
 				const actor = scopeUserId(getExecutionScope());
 				if (!actor)
@@ -802,6 +814,11 @@ function createContainer(): Container {
 			readClient: createReadClient(),
 			recreateReadClient: createReadClient,
 			readConnectionBudget: 2,
+			// task.0086: pins a patch's cites to commits with lock-free reads on the
+			// knowledge pool, never on the writer connection that holds the lock.
+			entryResolver: createDoltgresEntryResolver(doltClient),
+			// story.0033: a `moves` entry pins the metric's latest good observation as its baseline.
+			metricBaseline: moveMetrics.baselines,
 		});
 		const legacy = new LegacyWorkItemAdapter(createLegacyClient(), {
 			logger: log,

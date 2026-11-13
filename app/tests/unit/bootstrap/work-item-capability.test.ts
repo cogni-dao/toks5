@@ -37,7 +37,7 @@ describe("TOKS5 live score writer", () => {
     const capability = createWorkItemCapability({
       workItemQuery: {} as never,
       workItemCommand: {} as never,
-      backlogReader: { get: vi.fn(), list: vi.fn().mockResolvedValue({ items: [item] }) },
+      backlogReader: { list: vi.fn().mockResolvedValue({ items: [item] }) },
     });
     const [info] = await capability.query({ ids: [item.id] });
     expect(info).toEqual(toWorkItemDto(item));
@@ -58,15 +58,15 @@ describe("TOKS5 live score writer", () => {
       workItemQuery: {} as never,
       workItemCommand: {} as never,
       backlogReader: {
-        get: vi.fn(),
         list: vi.fn().mockResolvedValue({ items: [item] }),
       },
       backlogWriter: {
-        patch: patch as WorkItemsContentPort["patch"],
+        store: { patch: patch as WorkItemsContentPort["patch"] },
         principalId: () => actor,
       },
     });
-    const input = { id: item.id, expectedRevision: 1, set: { scores } };
+    const reason = "score the item";
+    const input = { id: item.id, expectedRevision: 1, reason, set: { scores } };
     await capability.patch(input);
     actor = "actor-b";
     const result = await capability.patch(input);
@@ -86,7 +86,7 @@ describe("TOKS5 live score writer", () => {
     expect(patch).toHaveBeenCalledTimes(2);
     actor = "actor-b";
     await expect(
-      capability.patch({ id: item.id, set: { priority: 1 } })
+      capability.patch({ id: item.id, reason, set: { priority: 1 } })
     ).rejects.toThrow("node admin");
     expect(patch).toHaveBeenCalledTimes(2);
   });
@@ -99,11 +99,12 @@ describe("TOKS5 live score writer", () => {
     const capability = createWorkItemCapability({
       workItemQuery: {} as never,
       workItemCommand: {} as never,
-      backlogWriter: { patch, principalId: () => "foreign-creator" },
+      backlogWriter: { store: { patch }, principalId: () => "foreign-creator" },
     });
     const input = {
       id: item.id,
       expectedRevision: 1,
+      reason: "triage",
       set: { scores, summary: "foreign content" },
     };
     await expect(capability.patch(input)).rejects.toBe(denied);
@@ -119,7 +120,6 @@ describe("work item capability legacy fallback", () => {
       list: vi.fn().mockResolvedValue({ items: [] }),
     };
     const backlog = {
-      get: vi.fn(),
       list: vi.fn().mockResolvedValue({ items: [] }),
     };
     const deps = {
@@ -146,17 +146,20 @@ describe("work item capability legacy fallback", () => {
       patch: vi.fn().mockResolvedValue(item),
       transitionStatus: vi.fn().mockResolvedValue({ ...item, status: "done" }),
     };
-    const backlog = { get: vi.fn(), list: vi.fn() };
+    const backlog = { list: vi.fn() };
     const capability = createWorkItemCapability({
       workItemQuery: markdown as never,
       workItemCommand: commands as never,
       backlogReader: backlog,
     });
-    await capability.patch({ id: item.id, set: { priority: 3 } });
+    await capability.patch({
+      id: item.id,
+      reason: "raise priority",
+      set: { priority: 3 },
+    });
     await capability.transitionStatus({ id: item.id, toStatus: "done" });
     expect(commands.patch).toHaveBeenCalledTimes(1);
     expect(commands.transitionStatus).toHaveBeenCalledTimes(1);
-    expect(backlog.get).not.toHaveBeenCalled();
     expect(backlog.list).not.toHaveBeenCalled();
   });
 });

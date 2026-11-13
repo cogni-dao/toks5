@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-10-29
+- **Last reviewed:** 2026-11-13
 - **Status:** draft
 
 ## Purpose
@@ -67,6 +67,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/work/items/[id]/claims` [POST, DELETE] - acquire or release an authenticated principal+run lease
   - `/api/v1/work/items/[id]/heartbeat` [POST] - refresh an authenticated principal+run lease
   - `/api/v1/work/items/[id]/coordination` [GET] - read lease and next-action coordination state
+  - `/api/v1/work/items/[id]/expectations` [GET] - one bounded read of the hypotheses an item's moves serve, each KPI prediction judged against its pinned baseline (session auth; 503 when a read fails, never an empty page)
   - `/api/v1/knowledge/domains/[domain]` [GET, PATCH, DELETE] - read, edit metadata, or delete an empty non-baseline domain (same session/bearer permission as collection POST)
   - `/api/v1/knowledge/index` [GET] - content-free knowledge routing projection with optional useWhen filter
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
