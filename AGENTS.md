@@ -66,6 +66,6 @@ and merge. Work against exactly one node + work item. Subdirectory `AGENTS.md` f
 floor; the closest file wins for code-local rules.
 
 Pointers: [contributor contract](.claude/skills/contribute-to-cogni/SKILL.md) ·
-[knowledge design](docs/spec/knowledge-syntropy.md) ·
-[cognition design](https://github.com/Cogni-DAO/cogni/blob/main/docs/spec/node-baas-architecture.md#cognition-substrate) ·
+[knowledge design](https://node-template.cognidao.org/knowledge/knowledge-write-contract) ·
+[Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) ·
 [operator discovery](https://cognidao.org/.well-known/agent.json)
