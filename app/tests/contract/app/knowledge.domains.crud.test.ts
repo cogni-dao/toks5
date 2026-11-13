@@ -36,6 +36,10 @@ vi.mock("@/bootstrap/container", () => ({
     clock: { now: () => new Date("2026-10-29T00:00:00Z") },
     config: { unhandledErrorPolicy: "rethrow" },
     knowledgeStorePort: configured ? store : null,
+    // The GET routes carry the knowledge.read door; its allow/deny is proven in knowledge.read-principal.test.ts.
+    agentAuthority: {
+      authorizeRoute: vi.fn(async () => ({ decision: "allow", basis: "role" })),
+    },
   })),
 }));
 
