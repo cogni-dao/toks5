@@ -10,7 +10,7 @@
  * Side-effects: none
  */
 
-import { ROUTE_ONLY_CAPABILITIES } from "@/bootstrap/route-capabilities";
+import { ROUTE_ONLY_CAPABILITIES } from "@cogni/agent-grants";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/shared/env", () => ({

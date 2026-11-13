@@ -10,8 +10,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, OPEN_BY_DESIGN_ROUTES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
-import { ROUTE_ONLY_CAPABILITIES } from "@/bootstrap/route-capabilities";
+import { DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 

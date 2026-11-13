@@ -390,11 +390,15 @@ export type {
 export {
   createGoalListImplementation,
   createWorkItemReadImplementation,
+  createWorkItemUpdateImplementation,
   GOAL_LIST_NAME,
   goalListBoundTool,
   goalListContract,
   WORK_ITEM_READ_NAME,
+  WORK_ITEM_UPDATE_NAME,
   WorkItemPatchConflictError,
   workItemReadBoundTool,
   workItemReadContract,
+  workItemUpdateBoundTool,
+  workItemUpdateContract,
 } from "@cogni/shared-ai-tools";

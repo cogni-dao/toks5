@@ -30,6 +30,7 @@ import {
   decideAsOwner,
   grantPersonal,
   revokePersonal,
+  ROUTE_ONLY_CAPABILITIES,
   type AuthzEvent,
   createPostgresAgentGrantsStore,
   buildNodeAiView,
@@ -54,7 +55,6 @@ import type { NodeAdminAuthority } from "@cogni/knowledge-store";
 import type { Logger } from "pino";
 import { EVENT_NAMES } from "@/shared/observability";
 import { buildPermissionCatalog, buildRequiresById } from "./agent-permissions";
-import { ROUTE_ONLY_CAPABILITIES } from "./route-capabilities";
 
 /** The service-role postgres.js client (`serviceDb.$client`): a tagged template that can also open a transaction. */
 export interface AgentAuthoritySql extends SqlTag {
