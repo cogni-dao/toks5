@@ -29,9 +29,12 @@ const DECLARED: Record<string, { routes: readonly string[] }> = {
   ...ROUTE_ONLY_CAPABILITIES,
 };
 
+/** Route ids the agent-grants map lists that this node has no route for (its knowledge API has no `browse` route). */
+const NO_ROUTE_ON_THIS_NODE = new Set(["knowledge.browse"]);
+
 describe("same-door routes", () => {
   for (const [tool, entry] of Object.entries(DECLARED)) {
-    for (const routeId of entry.routes) {
+    for (const routeId of entry.routes.filter((r) => !NO_ROUTE_ON_THIS_NODE.has(r))) {
       it(`${routeId} declares sameDoor: ${tool}`, () => {
         const declared = sources.some((s) =>
           new RegExp(`routeId:\\s*"${routeId.replace(".", "\\.")}",\\s*sameDoor:\\s*"${tool}"`).test(s)
