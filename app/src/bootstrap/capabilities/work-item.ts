@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2025 Cogni-DAO
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
  * Module: `@bootstrap/capabilities/work-item`
@@ -68,16 +68,16 @@ export interface WorkItemCapabilityDeps {
    * saw an empty backlog. Writes are unchanged.
    */
   readonly backlogReader?: Pick<WorkItemQueryPort, "list">;
-  /**
-   * PATCH_ON_THE_LIVE_BACKLOG: the node's Doltgres work-item store. When set, `patch`
-   * writes there as `principalId` (with caller compare-and-set) instead of the markdown ports.
-   */
   /** Reads the metrics a single item moves; absent means no metrics service (every move reads `unknown`). */
   readonly moveReadings?: MoveReadingPort | undefined;
   /** First page of an item's citation links (`read` with `includeLinks`); absent reads `unavailable`. */
   readonly links?: ItemLinksPort | undefined;
   /** One event per degraded envelope part (chain or links). */
   readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
+  /**
+   * PATCH_ON_THE_LIVE_BACKLOG: the node's Doltgres work-item store. When set, `patch`
+   * writes there as `principalId` (with caller compare-and-set) instead of the markdown ports.
+   */
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
     readonly principalId: string | (() => string);

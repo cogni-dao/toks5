@@ -47,7 +47,7 @@ export function metricHttpError(error: unknown): NextResponse {
 	return metricResponse(metricErrorResult(error, reportUnexpected));
 }
 
-/** Same reader instance as core__goal_progress, for the Knowledge page seed. */
+/** Same reader instance as core__goal_progress, for the Metrics page seed. */
 export async function loadGoalsProgress() {
 	return getContainer().goalProgress();
 }
