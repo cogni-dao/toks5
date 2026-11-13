@@ -144,7 +144,6 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   sharedTool("core__work_item_query"),
   sharedTool("core__work_item_read"),
   sharedTool("core__work_item_transition"),
-  sharedTool("core__work_item_update"),
 ];
 
 /**
