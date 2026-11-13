@@ -54,8 +54,9 @@ export async function handleList(
 ): Promise<NextResponse> {
   if (!sessionUser)
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  // The route's knowledge.read door already ran: a human, or a bearer with the knowledge:read role.
-  // (KNOWLEDGE_READ_NEEDS_GRANT, as on /knowledge.)
+  // Any authenticated principal may list domains (DOMAIN_LIST_REQUIRES_PRINCIPAL).
+  // Bearer agents need the registry to recall + target writes, mirroring
+  // KNOWLEDGE_READ_REQUIRES_PRINCIPAL on /knowledge.
   const p = port();
   if (!p)
     return NextResponse.json(
