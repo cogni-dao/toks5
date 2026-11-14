@@ -14,7 +14,7 @@
  *   initialData === post-hydration refetch — no hydration shift). Graph data is
  *   only pre-read on a `?mode=graph` deep-link; otherwise it stays deferred.
  * Side-effects: IO (Doltgres reads via container port)
- * Links: [KnowledgeDashboardView](./view.tsx), ./_server/loaders.ts, docs/spec/knowledge-syntropy.md
+ * Links: [KnowledgeDashboardView](./view.tsx), ./_server/loaders.ts, https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @public
  */
 

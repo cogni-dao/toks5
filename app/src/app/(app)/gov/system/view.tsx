@@ -7,7 +7,7 @@
  * Scope: Renders governance data fetched via React Query hooks. Does not perform server-side logic or direct DB access.
  * Invariants: Layout container owned by gov/layout.tsx; 30s polling for status, stale-while-revalidate for activity.
  * Side-effects: IO (via useGovernanceStatus hook and activity fetch)
- * Links: docs/spec/governance-status-api.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/governance-status-api.md
  * @public
  */
 
