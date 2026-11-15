@@ -43,7 +43,7 @@ This is the load-bearing part. Devs already poll for direction (`contribute-to-c
 
 5. **Intervene only on collision or drift.** Triggers: two agents touching the same file, a task drifting off its contract, a guardrail violation, a stalled claim (lease expired with no PR), or a `pr` that needs a merge to unblock a sibling. Otherwise, let them work.
 
-6. **Route a finished task to done — you own the merge.** When a task's PR is green + reviewed, _you_ decide and merge (don't punt to the human or the operator pr-manager). Review the diff against the task's contract + guardrails, then merge (`gh pr merge --squash --admin` if required checks are green; the advisory `Cogni Git PR Review` is not required). For the deploy-verify rung — flight + prove the change live — drive `/promote` and [`/validate-candidate`](../validate-candidate/SKILL.md); this skill **replaces `pr-coordinator-v0`** (its single-slot flight→QA→score→merge loop is now: those two skills for the mechanics + this skill for the decision).
+6. **Route a finished task to done — you own the merge.** When a task's PR is green + reviewed, _you_ decide and merge (don't punt to the human). Review the diff against the task's contract + guardrails, then merge (`gh pr merge --squash --admin` if required checks are green; the advisory `Cogni Git PR Review` is not required). For the deploy-verify rung — flight + prove the change live — drive `/promote` and [`/validate-candidate`](../validate-candidate/SKILL.md); this skill **replaces `pr-coordinator-v0`** (its single-slot flight→QA→score→merge loop is now: those two skills for the mechanics + this skill for the decision).
 
 ## Verification discipline (non-negotiable)
 
@@ -122,7 +122,7 @@ Lead with 🔴/🟡; 🟢 is earned (merged + proven live), never aspirational.
 
 ## Eventual home
 
-This is the human-driven v0. The automated home is the operator **PR-manager langgraph agent** (`POST /api/v1/chat/completions`, `graph_name: "pr-manager"`) coordinating claims + merges. Until that carries the loop, run it here.
+This is the human-driven v0. There is no automated home for this loop yet; run it here.
 
 ## Reference — the proven cycle (2026-06-16)
 
