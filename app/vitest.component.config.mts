@@ -50,6 +50,9 @@ export default defineConfig({
     setupFiles: ["./tests/setup.ts"],
     globalSetup: ["./tests/component/setup/testcontainers-postgres.global.ts"],
     sequence: { concurrent: false },
+    // Component files share one Postgres and the agent tests delete and insert the same users/bindings/roles rows in different
+    // orders, so parallel files deadlock (node-template main hit the same `deadlock detected` in agent-roles-route). Run files one at a time.
+    fileParallelism: false,
   },
   resolve: {
     alias: {
