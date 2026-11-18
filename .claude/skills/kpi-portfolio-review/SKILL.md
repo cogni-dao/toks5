@@ -5,11 +5,14 @@ description: Review the whole measurement and autonomy portfolio critically. Use
 
 # kpi-portfolio-review
 
-This file is only the trigger. The knowledge hub is the authoritative, refinable contract.
+This file is only the trigger. The node-template hub hosts the authoritative, refinable method.
 
-Read these entries from this node's authenticated knowledge API, then follow them:
-- `GET /api/v1/knowledge/kpi-portfolio-review`
-- `GET /api/v1/knowledge/metrics-expert`
-- `GET /api/v1/knowledge/node-ai-operations-matrix`
+Read these node-template-owned entries with `COGNI_NODE_TEMPLATE_API_KEY` (on node-template itself, `COGNI_NODE_API_KEY`), then follow them:
+- `GET https://node-template.cognidao.org/api/v1/knowledge/kpi-portfolio-review`
+- `GET https://node-template.cognidao.org/api/v1/knowledge/metrics-expert`
+
+Run the method against this node's own hub, `https://toks5.cognidao.org`, with its `COGNI_NODE_API_KEY`. Every read the method names is relative to that base, never to node-template. The operations matrix is `node-ai-operations-matrix` on this node's hub when it exists. The mission is this node's `intent.mission` from `.cogni/repo-spec.yaml`, as served by `GET https://toks5.cognidao.org/api/v1/cognition`.
+
+No key yet? Register once with `POST https://node-template.cognidao.org/api/v1/agent/register` and `{"name":"<agent name>"}`, then save the key in the gitignored `.env.cogni`.
 
 Do not reconstruct or preserve a fallback copy in this repository.
