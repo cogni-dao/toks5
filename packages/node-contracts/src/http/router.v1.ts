@@ -18,6 +18,7 @@ import { metaLivezOutputSchema } from "../meta.livez.read.v1.contract";
 import { metaReadyzOutputSchema } from "../meta.readyz.read.v1.contract";
 import { metaRoutesOutputSchema } from "../meta.route-manifest.read.v1.contract";
 import {
+  workItemsArtifactGetOperation,
   workItemsArtifactsCreateOperation,
   workItemsArtifactsListOperation,
 } from "../work.items.artifacts.v1.contract";
@@ -95,6 +96,7 @@ export const ApiContractV1 = c.router({
     path: "/work/items/:id",
     summary: workItemsGetOperation.summary,
     description: workItemsGetOperation.description,
+    query: workItemsGetOperation.input.omit({ id: true }),
     responses: {
       200: workItemsGetOperation.output,
     },
@@ -114,6 +116,7 @@ export const ApiContractV1 = c.router({
     path: "/work/items/:id/history",
     summary: workItemsHistoryOperation.summary,
     description: workItemsHistoryOperation.description,
+    query: workItemsHistoryOperation.input.omit({ id: true }),
     responses: {
       200: workItemsHistoryOperation.output,
     },
@@ -133,8 +136,18 @@ export const ApiContractV1 = c.router({
     path: "/work/items/:id/artifacts",
     summary: workItemsArtifactsListOperation.summary,
     description: workItemsArtifactsListOperation.description,
+    query: workItemsArtifactsListOperation.input.omit({ id: true }),
     responses: {
       200: workItemsArtifactsListOperation.output,
+    },
+  },
+  workItemsArtifactGet: {
+    method: "GET",
+    path: "/work/items/:id/artifacts/:artifactId",
+    summary: workItemsArtifactGetOperation.summary,
+    description: workItemsArtifactGetOperation.description,
+    responses: {
+      200: workItemsArtifactGetOperation.output,
     },
   },
   knowledgeHistory: {
