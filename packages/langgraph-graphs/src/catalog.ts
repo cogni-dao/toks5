@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/langgraph-graphs/catalog`
  * Purpose: Single source of truth for LangGraph graph definitions.
- * Scope: Exports LANGGRAPH_CATALOG with all available graphs. Does NOT import from src/.
+ * Scope: Exports the node-runtime catalog (LANGGRAPH_CATALOG): `cogni`, `work-prioritizer` and `work-closeout`. Does NOT import from src/.
  * Invariants:
  *   - CATALOG_SINGLE_SOURCE_OF_TRUTH: Graph definitions live here, not in bootstrap
  *   - PACKAGES_NO_SRC_IMPORTS: No imports from src/**
@@ -14,56 +14,33 @@
  * @public
  */
 
-import { NODE_LANGGRAPH_CATALOG as SHARED_NODE_CATALOG } from "@cogni/shared-langgraph-graphs";
 import {
-  AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
-  AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
-  AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME,
-  createAutoresearchGraph,
-} from "./graphs/autoresearch/graph";
+  COGNI_DECIDE_PROMPT,
+  COGNI_DECIDE_TOOL_IDS,
+} from "./graphs/mission/cogni-decide";
+import { createMissionGraph } from "./graphs/mission/graph";
 import {
-  AUTORESEARCH_REGISTRY_SWARM_PROMPT,
-  AUTORESEARCH_SINGLE_LANE_PROMPT,
-  AUTORESEARCH_SYNTROPY_LOOP_PROMPT,
-} from "./graphs/autoresearch/prompts";
-import { AUTORESEARCH_TOOL_IDS } from "./graphs/autoresearch/tools";
-import { BRAIN_GRAPH_NAME, createBrainGraph } from "./graphs/brain/graph";
-import { BRAIN_TOOL_IDS } from "./graphs/brain/tools";
-import { BROWSER_GRAPH_NAME, createBrowserGraph } from "./graphs/browser/graph";
+  createCoordinatorGraph,
+  COORDINATOR_TOOL_IDS,
+} from "./graphs/coordinator/graph";
+import { coordinatorCatalogPrompt } from "./graphs/coordinator/prompts";
 import {
-  createFrontendTesterGraph,
-  FRONTEND_TESTER_GRAPH_NAME,
-} from "./graphs/frontend-tester/graph";
+  createWorkCloseoutGraph,
+  WORK_CLOSEOUT_GRAPH_NAME,
+} from "./graphs/work-closeout/graph";
+import { WORK_CLOSEOUT_SYSTEM_PROMPT } from "./graphs/work-closeout/prompts";
 import {
-  createOperatorGraph,
-  GIT_REVIEWER_GRAPH_NAME,
-  OPERATING_REVIEW_GRAPH_NAME,
-} from "./graphs/operator/graph";
-import {
-  GIT_REVIEWER_PROMPT,
-  OPERATING_REVIEW_PROMPT,
-} from "./graphs/operator/prompts";
-import {
-  GIT_REVIEWER_TOOL_IDS,
-  OPERATING_REVIEW_TOOL_IDS,
-} from "./graphs/operator/tools";
-import { createPoetGraph, POET_GRAPH_NAME } from "./graphs/poet/graph";
-import { POET_TOOL_IDS } from "./graphs/poet/tools";
-import {
-  createPondererGraph,
-  PONDERER_GRAPH_NAME,
-} from "./graphs/ponderer/graph";
-import { PONDERER_TOOL_IDS } from "./graphs/ponderer/tools";
-import {
-  createPrReviewGraph,
-  PR_REVIEW_GRAPH_NAME,
-} from "./graphs/pr-review/graph";
-import {
-  createResearchGraph,
-  RESEARCH_GRAPH_NAME,
-} from "./graphs/research/graph";
-import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
+  VCS_COMMIT_CONTAINS,
+  VCS_PR_READ,
+} from "./graphs/work-closeout/receipts";
+import { WORK_PRIORITIZER_GRAPH_NAME } from "./graphs/work-prioritizer/graph";
+import type { WorkflowGuidance } from "./graphs/coordinator/guidance";
+import type { CreateReactAgentGraphOptions } from "./graphs/types";
 import type { CreateGraphFn } from "./inproc/types";
+
+/** Internal agent principal slugs seeded by the node migration (`agent_principals.slug`). */
+export const NODE_AI_PRINCIPAL = "node-ai" as const;
+export const PRIORITIZER_PRINCIPAL = "prioritizer" as const;
 
 /**
  * Catalog entry shape.
@@ -71,32 +48,95 @@ import type { CreateGraphFn } from "./inproc/types";
  * Per TOOL_CATALOG_IS_CANONICAL: graphs reference tools by ID, not by BoundTool.
  * Providers resolve tools from TOOL_CATALOG using these IDs.
  */
-interface CatalogEntry {
+export interface CatalogEntry {
+  /** Canonical full graph card, required before the coordinator schedules this workflow. */
+  readonly guidanceId?: string;
+  /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
+  readonly program?: "cogni" | "work-review" | "work-closeout";
+  /**
+   * Recurring duty this workflow can own. The node coordinator reads it to decide, from goals and evidence,
+   * which jobs to keep: no duty is named in the operator prompt. `purpose` is the stable job purpose.
+   */
+  readonly duty?: {
+    readonly purpose: string;
+    readonly serves: string;
+    readonly neededWhen: string;
+    /** The task each recurring run receives; the program owns it, not the coordinator. */
+    readonly instruction: string;
+  };
   readonly displayName: string;
   readonly description: string;
+  /**
+   * Internal agent principal slug this graph acts as (an `agent_principals` row). A graph with no
+   * principal gets no scoped tool; a slug with no seed row denies the run before any tool runs.
+   */
+  readonly principal?: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
   readonly toolIds: readonly string[];
   /** MCP server names whose tools this graph may use. Empty = no MCP tools. */
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
-  /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
+  /** Optional system prompt for mission-engine graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
+  /**
+   * Graph-owned run report (PURE_GRAPH_FACTORY): the graph returns `structuredResponse.telemetry` (flat,
+   * safe to log). The provider logs it as `event` (a registered event name) and echoes it onto the run
+   * stream as one GRAPH_REPORT_OPEN…GRAPH_REPORT_CLOSE text delta.
+   */
+  readonly report?: GraphReportDecl;
 }
 
-const createAutoresearchCatalogEntry = (
-  displayName: string,
-  description: string,
-  systemPrompt: string
-): CatalogEntry => ({
-  displayName,
-  description,
-  toolIds: AUTORESEARCH_TOOL_IDS as readonly string[],
-  graphFactory: createAutoresearchGraph,
-  systemPrompt,
-});
+/** CatalogEntry.report: the registered event name for the graph's telemetry. */
+export interface GraphReportDecl {
+  readonly event: string;
+}
+
+/** Delimiters of a catalog-declared run report on the run stream (CatalogEntry.report). */
+export const GRAPH_REPORT_OPEN = "<graph_report>";
+export const GRAPH_REPORT_CLOSE = "</graph_report>";
 
 /**
- * LangGraph catalog - single source of truth for graph definitions.
+ * Log lines for a catalog-declared report: one `report.event` from `structuredOutput.telemetry`. Empty when
+ * the output carries none.
+ * Pure: the provider owns the logger and only calls this (CATALOG_REPORT_SEAM).
+ */
+export function graphReportLogFields(
+  report: GraphReportDecl,
+  runId: string,
+  structuredOutput: Record<string, unknown> | undefined,
+): Record<string, unknown>[] {
+  const telemetry = structuredOutput?.telemetry;
+  return telemetry && typeof telemetry === "object"
+    ? [{ event: report.event, runId, ...telemetry }]
+    : [];
+}
+
+/** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */
+export function graphReportDelta(
+  structuredOutput: Record<string, unknown> | undefined,
+): string | null {
+  const telemetry = structuredOutput?.telemetry;
+  return telemetry && typeof telemetry === "object"
+    ? `\n${GRAPH_REPORT_OPEN}${JSON.stringify(telemetry)}${GRAPH_REPORT_CLOSE}\n`
+    : null;
+}
+
+export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
+
+/** Bind guidance from the trusted registry; return the native compiled graph directly. */
+function createCatalogCogniGraph(opts: CreateReactAgentGraphOptions) {
+  return createCoordinatorGraph({ ...opts, workflowGuidance: catalogWorkflowGuidance() });
+}
+function catalogWorkflowGuidance(): WorkflowGuidance[] {
+  return Object.entries(NODE_LANGGRAPH_CATALOG).flatMap(([id, entry]: [string, CatalogEntry]) =>
+    entry.guidanceId ? [{ graphId: `langgraph:${id}`, guidanceId: entry.guidanceId }] : [],
+  );
+}
+createCatalogCogniGraph.createRunHooks = createCoordinatorGraph.createRunHooks;
+
+/**
+ * Node runtime LangGraph catalog — the graphs every sovereign node runs: `cogni` (the node
+ * operator) and `work-prioritizer` (the scheduled scoring program).
  *
  * To add a new graph:
  * 1. Create graph factory in graphs/<name>/graph.ts
@@ -104,139 +144,96 @@ const createAutoresearchCatalogEntry = (
  * 3. Bootstrap automatically picks it up (no changes needed there)
  *
  * Per CATALOG_SINGLE_SOURCE_OF_TRUTH: graphs are defined here, not in bootstrap.
+ * Operator lifecycle graphs (PR review and management) are operator services, not node graphs.
  */
-export const LANGGRAPH_CATALOG: Readonly<Record<string, CatalogEntry>> = {
-  "work-prioritizer": SHARED_NODE_CATALOG["work-prioritizer"],
-  [AUTORESEARCH_SINGLE_LANE_GRAPH_NAME]: createAutoresearchCatalogEntry(
-    "Autoresearch Single Lane",
-    "Karpathy-style single-lane experiment loop with Thinker, Flasher, Eval, and Judge",
-    AUTORESEARCH_SINGLE_LANE_PROMPT
-  ),
-
-  [AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME]: createAutoresearchCatalogEntry(
-    "Autoresearch Syntropy Loop",
-    "Knowledge-syntropy autoresearch loop with Librarian, Archivist, Curator, Thinker, Flasher, and Judge",
-    AUTORESEARCH_SYNTROPY_LOOP_PROMPT
-  ),
-
-  [AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME]: createAutoresearchCatalogEntry(
-    "Autoresearch Registry Swarm",
-    "Registry-aware autoresearch tournament across conservative, retrieval, and topology lanes",
-    AUTORESEARCH_REGISTRY_SWARM_PROMPT
-  ),
-
+export const NODE_LANGGRAPH_CATALOG = {
   /**
-   * Brain graph - code-aware assistant with repository access.
-   * Uses createReactAgent with repo search and file open tools.
+   * Work Prioritizer (story.5108 / story.5116) — every node runs it: a node schedules
+   * `langgraph:work-prioritizer` in its own repo-spec, and a node with no approved goals changes
+   * nothing. Its program identity is "work-review"; it uses the shared triage profile
+   * and must not file a reflexive EDO.
    */
-  [BRAIN_GRAPH_NAME]: {
-    displayName: "Brain",
-    description: "Code-aware assistant with repository search and file access",
-    toolIds: BRAIN_TOOL_IDS,
-    graphFactory: createBrainGraph,
+  [WORK_PRIORITIZER_GRAPH_NAME]: {
+    guidanceId: "graph-work-prioritizer",
+    displayName: "Work Prioritizer",
+    description: "Triages open work: scores, goal links, status routes and cancels, or changes nothing",
+    principal: PRIORITIZER_PRINCIPAL,
+    toolIds: COGNI_DECIDE_TOOL_IDS,
+    graphFactory: createMissionGraph,
+    systemPrompt: COGNI_DECIDE_PROMPT,
+    program: "work-review",
+    duty: {
+      purpose: "node-work-triage",
+      serves: "Prioritize: every active goal's open work stays scored, goal-linked and routed",
+      neededWhen: "open work is unscored, untriaged or scored before a goal or KPI changed",
+      instruction:
+        "Triage open work per the work-item-triage guide: goal-linked and unscored first, judging and writing one candidate at a time, applying only justified changes and no-op when unchanged.",
+    },
+    report: { event: "ai.work_prioritizer.cycle" },
   },
-
   /**
-   * Poet graph - poetic AI assistant.
-   * Uses createReactAgent with tool-calling loop.
+   * Work Closeout (story.0035) closes items whose merged pull request is live in the running build, setting them
+   * done with the pull request as evidence (never deployVerified; the store gate checks the review and validation first). It acts as the `prioritizer` principal: the node's
+   * work-ledger steward, which already holds `work_item:transition`.
    */
-  [POET_GRAPH_NAME]: {
-    displayName: "Poet",
-    description: "Poetic AI assistant with structured verse responses",
-    toolIds: POET_TOOL_IDS,
-    graphFactory: createPoetGraph,
-  },
-
-  /**
-   * Ponderer graph - philosophical thinker agent.
-   * Same tools as poet, but with philosophical system prompt.
-   */
-  [PONDERER_GRAPH_NAME]: {
-    displayName: "Ponderer",
-    description: "Philosophical thinker with concise, profound responses",
-    toolIds: PONDERER_TOOL_IDS,
-    graphFactory: createPondererGraph,
-  },
-
-  /**
-   * Research graph - deep research agent with web search.
-   * Conducts thorough research and produces structured reports.
-   */
-  [RESEARCH_GRAPH_NAME]: {
-    displayName: "Research",
-    description: "Deep research agent with web search and report generation",
-    toolIds: RESEARCH_TOOL_IDS,
-    graphFactory: createResearchGraph,
-  },
-
-  /**
-   * PR Review graph - single-call structured output for PR evaluation.
-   * No tools — evidence is pre-fetched and passed as message content.
-   */
-  [PR_REVIEW_GRAPH_NAME]: {
-    displayName: "PR Review",
+  [WORK_CLOSEOUT_GRAPH_NAME]: {
+    displayName: "Work Closeout",
     description:
-      "Evaluates pull requests against declarative rules with structured scoring",
-    toolIds: [],
-    graphFactory: createPrReviewGraph,
+      "Closes items whose merged pull request is live in this build: done with the pull request, or changes nothing",
+    principal: PRIORITIZER_PRINCIPAL,
+    toolIds: [
+      "core__work_item_query",
+      "core__work_item_read",
+      VCS_PR_READ,
+      VCS_COMMIT_CONTAINS,
+      "core__work_item_update",
+      "core__get_current_time",
+    ],
+    graphFactory: createWorkCloseoutGraph,
+    systemPrompt: WORK_CLOSEOUT_SYSTEM_PROMPT,
+    program: "work-closeout",
+    duty: {
+      purpose: "node-work-closeout",
+      serves: "goal-ai-work-converges: shipped work is counted as validated",
+      neededWhen: "items in needs_closeout or needs_merge have a merged pull request",
+      instruction:
+        "Close out shipped work: close only items whose merged pull request is live in this build, and no-op when none qualifies.",
+    },
+    report: { event: "ai.work_closeout.cycle" },
   },
-
-  /**
-   * Browser graph - web browsing agent via Playwright MCP.
-   * No native tools — all tools come from MCP servers.
-   */
-  [BROWSER_GRAPH_NAME]: {
-    displayName: "Browser",
-    description: "Web browsing agent with Playwright MCP browser access",
-    toolIds: [],
-    mcpServerIds: ["playwright"],
-    graphFactory: createBrowserGraph,
-  },
-
-  /**
-   * Frontend tester graph - QA agent that drives Playwright to verify UI behavior.
-   * Navigates, interacts, screenshots, and reports pass/fail per test case.
-   */
-  [FRONTEND_TESTER_GRAPH_NAME]: {
-    displayName: "Frontend Tester",
+  cogni: {
+    guidanceId: "graph-cogni",
+    displayName: "Cogni",
+    principal: NODE_AI_PRINCIPAL,
     description:
-      "QA agent that tests web UIs via Playwright and monitors system health via Grafana",
-    toolIds: [],
-    mcpServerIds: ["playwright", "grafana"],
-    graphFactory: createFrontendTesterGraph,
-  },
-
-  /**
-   * Operating Review — periodic planner-of-record for backlog health.
-   * Runs every 12h to triage, flag stuck items, and produce structured briefs.
-   */
-  [OPERATING_REVIEW_GRAPH_NAME]: {
-    displayName: "Operating Review",
-    description:
-      "Periodic review — triages backlog, flags risks, produces structured briefs",
-    toolIds: OPERATING_REVIEW_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
-    systemPrompt: OPERATING_REVIEW_PROMPT,
-  },
-
-  /**
-   * Git Reviewer — queue observer for merge-ready items.
-   * Reports status based on work item metadata (no GitHub API access).
-   */
-  [GIT_REVIEWER_GRAPH_NAME]: {
-    displayName: "Git Reviewer",
-    description:
-      "Queue observer — reports merge-ready item status from metadata",
-    toolIds: GIT_REVIEWER_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
-    systemPrompt: GIT_REVIEWER_PROMPT,
+      "Node coordinator: reads goals and work, manages authorized recurring jobs, and verifies effects",
+    toolIds: COORDINATOR_TOOL_IDS,
+    graphFactory: createCatalogCogniGraph,
+    get systemPrompt(): string {
+      return coordinatorCatalogPrompt(
+        Object.entries(NODE_LANGGRAPH_CATALOG).map(([id, entry]) => ({
+          id: `langgraph:${id}`,
+          description: entry.description,
+          toolIds: entry.toolIds,
+          mcpServerIds: (entry as CatalogEntry).mcpServerIds ?? [],
+          duty: (entry as CatalogEntry).duty ?? null,
+          schedulable: Boolean((entry as CatalogEntry).guidanceId),
+        })),
+      );
+    },
+    program: "cogni",
   },
 } as const;
 
 /**
+ * Node-runtime catalog.
+ */
+export const LANGGRAPH_CATALOG: LangGraphCatalog = NODE_LANGGRAPH_CATALOG;
+
+/**
  * Type helper for catalog entry lookup (short names).
  */
-export type LangGraphCatalogKeys = keyof typeof LANGGRAPH_CATALOG;
+export type LangGraphCatalogKeys = keyof typeof NODE_LANGGRAPH_CATALOG;
 
 /**
  * LangGraph provider ID for namespacing.
@@ -247,21 +244,16 @@ export const LANGGRAPH_PROVIDER_ID = "langgraph" as const;
  * Fully-qualified graph IDs satisfying GraphId from @cogni/ai-core.
  * Per GRAPH_ID_NAMESPACED: format is ${providerId}:${graphName}
  */
-export const LANGGRAPH_GRAPH_IDS = {
-  "work-prioritizer": "langgraph:work-prioritizer",
-  "autoresearch-single-lane": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_SINGLE_LANE_GRAPH_NAME}`,
-  "autoresearch-syntropy-loop": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME}`,
-  "autoresearch-registry-swarm": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME}`,
-  brain: `${LANGGRAPH_PROVIDER_ID}:${BRAIN_GRAPH_NAME}`,
-  poet: `${LANGGRAPH_PROVIDER_ID}:${POET_GRAPH_NAME}`,
-  ponderer: `${LANGGRAPH_PROVIDER_ID}:${PONDERER_GRAPH_NAME}`,
-  research: `${LANGGRAPH_PROVIDER_ID}:${RESEARCH_GRAPH_NAME}`,
-  "pr-review": `${LANGGRAPH_PROVIDER_ID}:${PR_REVIEW_GRAPH_NAME}`,
-  browser: `${LANGGRAPH_PROVIDER_ID}:${BROWSER_GRAPH_NAME}`,
-  "frontend-tester": `${LANGGRAPH_PROVIDER_ID}:${FRONTEND_TESTER_GRAPH_NAME}`,
-  "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
-  "git-reviewer": `${LANGGRAPH_PROVIDER_ID}:${GIT_REVIEWER_GRAPH_NAME}`,
+export const NODE_LANGGRAPH_GRAPH_IDS = {
+  cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
+  "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
+  "work-closeout": `${LANGGRAPH_PROVIDER_ID}:${WORK_CLOSEOUT_GRAPH_NAME}`,
 } as const;
+
+/**
+ * Node-runtime graph IDs.
+ */
+export const LANGGRAPH_GRAPH_IDS = NODE_LANGGRAPH_GRAPH_IDS;
 
 /**
  * Union type of all valid LangGraph graph IDs.
@@ -272,4 +264,4 @@ export type LangGraphGraphId =
 /**
  * Default graph ID.
  */
-export const DEFAULT_LANGGRAPH_GRAPH_ID = LANGGRAPH_GRAPH_IDS.poet;
+export const DEFAULT_LANGGRAPH_GRAPH_ID = LANGGRAPH_GRAPH_IDS.cogni;

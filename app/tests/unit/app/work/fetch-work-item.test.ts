@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Covers exact-item cookie-auth fetches, the unknown-id error state, and the bounded summary/board fetchers (task.0056). */
+// @vitest-environment jsdom
+
+/** Covers exact-item cookie-auth fetches and the unknown-id error state. */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  fetchWorkBoard,
   fetchWorkItem,
   fetchWorkItems,
   WorkItemFetchError,
@@ -30,7 +31,7 @@ describe("fetchWorkItem", () => {
       expect.objectContaining({
         credentials: "same-origin",
         cache: "no-store",
-      })
+      }),
     );
   });
 
@@ -41,7 +42,7 @@ describe("fetchWorkItem", () => {
         ok: false,
         status: 404,
         json: () => Promise.resolve({ error: "Work item not found: bug.9999" }),
-      })
+      }),
     );
 
     const error = await fetchWorkItem("bug.9999").catch((caught) => caught);
@@ -59,7 +60,7 @@ describe("fetchWorkItem", () => {
         ok: false,
         status: 503,
         json: () => Promise.resolve({ error: "Work-item store is busy" }),
-      })
+      }),
     );
 
     await expect(fetchWorkItem("task.5174")).rejects.toMatchObject({
@@ -80,53 +81,99 @@ describe("fetchWorkItem", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/work/items/bug.%252F",
-      expect.any(Object)
+      expect.any(Object),
     );
   });
 });
 
-describe("bounded work list fetchers (task.0056)", () => {
+describe("fetchWorkItems bounded page", () => {
   afterEach(() => vi.unstubAllGlobals());
-
-  it("fetchWorkItems requests exactly one summaries page and never follows its cursor", async () => {
+  it("returns one page without fetching the next", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: () =>
-        Promise.resolve({
-          items: [{ id: "task.1" }],
-          pageInfo: { endCursor: "next", hasMore: true },
-        }),
+      json: async () => ({
+        items: [{ id: "task.5000" }],
+        pageInfo: { endCursor: "next", hasMore: true },
+      }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    const signal = new AbortController().signal;
-
     const page = await fetchWorkItems(
-      new URLSearchParams("statuses=needs_implement&limit=25"),
-      signal
+      new URLSearchParams({ limit: "10", rankMin: "4" }),
     );
-
-    expect(page.pageInfo).toEqual({ endCursor: "next", hasMore: true });
+    expect(page.items).toHaveLength(1);
+    expect(page.pageInfo?.hasMore).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/work/summaries?statuses=needs_implement&limit=25",
-      expect.objectContaining({ signal, credentials: "same-origin" })
+      "/api/v1/work/summaries?limit=10&rankMin=4",
+      expect.any(Object),
     );
   });
-
-  it("fetchWorkBoard requests one board and carries the HTTP status on failure", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 400,
-      json: () => Promise.resolve({ error: "invalid input" }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      fetchWorkBoard(new URLSearchParams("statuses=nope"))
-    ).rejects.toMatchObject({ name: "WorkItemFetchError", status: 400 });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "/api/v1/work/board?statuses=nope"
+  it("reports server errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: "Work-item store is busy" }),
+      }),
+    );
+    await expect(fetchWorkItems(new URLSearchParams())).rejects.toThrow(
+      "Work-item store is busy",
     );
   });
+});
+
+it("passes cancellation to both list and detail requests", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
+  vi.stubGlobal("fetch", fetchMock);
+  const signal = new AbortController().signal;
+  await fetchWorkItems(new URLSearchParams(), signal);
+  await fetchWorkItem("task.0042", signal);
+  expect(fetchMock.mock.calls[0]?.[1].signal).toBe(signal);
+  expect(fetchMock.mock.calls[1]?.[1].signal).toBe(signal);
+  vi.unstubAllGlobals();
+});
+
+const uiRoute = vi.hoisted(() => ({ params: new URLSearchParams("view=table"), replace: vi.fn(), push: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: uiRoute.replace, push: uiRoute.push }),
+  usePathname: () => "/work",
+  useParams: () => ({}),
+  useSearchParams: () => uiRoute.params,
+}));
+vi.mock("@cogni/node-ui-kit/util/use-is-mobile", () => ({ useIsMobile: () => false }));
+vi.mock("@/components", async () => ({
+  ...(await import("@cogni/node-ui-kit/shadcn/button")),
+  ...(await import("@cogni/node-ui-kit/shadcn/input")),
+}));
+vi.mock("@/app/(app)/work/_components/WorkItemDetail", () => ({ WorkItemDetail: () => null }));
+
+it("clears keyboard focus when an equal-sized cached page replaces its members", async () => {
+  const React = await import("react");
+  const { render, fireEvent, screen, waitFor, cleanup } = await import("@testing-library/react");
+  const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+  const { WorkNavigationBoundary } = await import("@/app/(app)/work/WorkNavigationBoundary");
+  const { WorkDashboardView } = await import("@/app/(app)/work/view");
+  const item = (id: string) => ({ id, title: id, type: "task", status: "needs_implement", labels: [], createdAt: "2026-01-01", updatedAt: "2026-01-01" });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ ok: true, json: async () => ({ items: [item(url.includes("cursor=next") ? "task.2" : "task.1")], pageInfo: { hasMore: false, endCursor: null } }) })));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const element = () => React.createElement(QueryClientProvider, { client }, React.createElement(WorkNavigationBoundary, null, React.createElement(WorkDashboardView)));
+  const view = render(element());
+  await screen.findAllByText("task.1");
+  fireEvent.keyDown(document, { key: "j" });
+  uiRoute.params = new URLSearchParams("view=table&cursor=next");
+  view.rerender(element());
+  await screen.findAllByText("task.2");
+  fireEvent.keyDown(document, { key: "Enter" });
+  await waitFor(() => expect(uiRoute.push).not.toHaveBeenCalled());
+  fireEvent.keyDown(document, { key: "j" });
+  uiRoute.params = new URLSearchParams("view=table");
+  view.rerender(element());
+  await screen.findAllByText("task.1");
+  fireEvent.keyDown(document, { key: "Enter" });
+  expect(uiRoute.push).not.toHaveBeenCalled();
+  fireEvent.keyDown(document, { key: "j" });
+  fireEvent.keyDown(document, { key: "Enter" });
+  await waitFor(() => expect(uiRoute.push).toHaveBeenCalledWith(expect.stringContaining("task.1"), expect.anything()));
+  cleanup(); vi.unstubAllGlobals();
 });

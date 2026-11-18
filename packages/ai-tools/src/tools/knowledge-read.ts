@@ -1,23 +1,152 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Node facade: canonical read envelope and execution; local catalog/bindings remain sovereign. */
-import { KnowledgeReadOutputSchema } from "@cogni/shared-ai-tools";
+/**
+ * Module: `@cogni/ai-tools/tools/knowledge-read`
+ * Purpose: AI tool for reading knowledge entries by ID or listing by domain + tags.
+ * Scope: Read-only retrieval. Does not write or commit.
+ * Invariants:
+ *   - TOOL_ID_NAMESPACED: ID is `core__knowledge_read`
+ *   - EFFECT_TYPED: effect is `read_only`
+ *   - HARD_BOUNDS: max 50 results for list mode
+ * Side-effects: IO (database read via capability)
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md
+ * @public
+ */
 
-export type {
-  KnowledgeReadDeps,
+import { z } from "zod";
+import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
+
+import type { KnowledgeCapability } from "../capabilities/knowledge";
+import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
+import type { BoundTool, ToolContract, ToolImplementation } from "../types";
+
+// ─── Schemas ─────────────────────────────────────────────────────────────────
+
+export const KnowledgeReadInputSchema = z
+  .object({
+    id: z
+      .string()
+      .optional()
+      .describe("Get a specific entry by ID (mutually exclusive with domain)"),
+    domain: z
+      .string()
+      .optional()
+      .describe("List entries by domain (mutually exclusive with id)"),
+    tags: z
+      .array(z.string())
+      .optional()
+      .describe("Filter by tags (only with domain mode)"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(50)
+      .optional()
+      .describe("Max results for list mode (1-50, default 20)"),
+  })
+  .refine((d) => d.id || d.domain, {
+    message: "Either 'id' or 'domain' is required",
+  });
+export type KnowledgeReadInput = z.infer<typeof KnowledgeReadInputSchema>;
+
+export const KnowledgeReadEntrySchema = KnowledgeRowSchema.extend({
+  sourceUrl: z.string().url().optional(),
+  sourceUrlUnavailable: z.literal(true).optional(),
+});
+
+export const KnowledgeReadOutputSchema = z.object({
+  mode: z.enum(["get", "list"]),
+  entries: z.array(KnowledgeReadEntrySchema),
+  totalFound: z.number(),
+});
+export type KnowledgeReadOutput = z.infer<typeof KnowledgeReadOutputSchema>;
+export type KnowledgeReadRedacted = KnowledgeReadOutput;
+
+// ─── Contract ────────────────────────────────────────────────────────────────
+
+export const KNOWLEDGE_READ_NAME = "core__knowledge_read" as const;
+
+export const knowledgeReadContract: ToolContract<
+  typeof KNOWLEDGE_READ_NAME,
   KnowledgeReadInput,
   KnowledgeReadOutput,
-  KnowledgeReadRedacted,
-} from "@cogni/shared-ai-tools";
-export {
-  createKnowledgeReadImplementation,
-  KNOWLEDGE_READ_NAME,
-  KnowledgeReadInputSchema,
-  KnowledgeReadOutputSchema,
-  knowledgeReadBoundTool,
-  knowledgeReadContract,
-  knowledgeReadStubImplementation,
-} from "@cogni/shared-ai-tools";
-export const KnowledgeReadEntrySchema =
-  KnowledgeReadOutputSchema.shape.entries.element;
+  KnowledgeReadRedacted
+> = {
+  name: KNOWLEDGE_READ_NAME,
+  description:
+    "Read knowledge entries from the node's knowledge store. " +
+    "Use with 'id' to get a specific entry, or 'domain' to list entries (optionally filtered by tags). " +
+    "Each entry includes a confidence score (0-100): 30=draft, 80=verified, 95+=hardened.",
+  effect: "read_only",
+  inputSchema: KnowledgeReadInputSchema,
+  outputSchema: KnowledgeReadOutputSchema,
+  redact: (output) => output,
+  allowlist: ["mode", "entries", "totalFound"] as const,
+};
+
+// ─── Implementation ──────────────────────────────────────────────────────────
+
+export interface KnowledgeReadDeps {
+  knowledgeCapability: KnowledgeCapability;
+  readonly nodePublicOrigin?: string | undefined;
+}
+
+export function createKnowledgeReadImplementation(
+  deps: KnowledgeReadDeps
+): ToolImplementation<KnowledgeReadInput, KnowledgeReadOutput> {
+  return {
+    execute: async (input) => {
+      if (input.id) {
+        const entry = await deps.knowledgeCapability.get(input.id);
+        return {
+          mode: "get" as const,
+          entries: entry ? [{
+            ...withoutSourceProvenance(entry),
+            ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", entry.id),
+          }] : [],
+          totalFound: entry ? 1 : 0,
+        };
+      }
+
+      // After the `if (input.id)` early return, the Zod refine guarantees domain is defined
+      const domain = input.domain ?? "";
+      const entries = await deps.knowledgeCapability.list({
+        domain,
+        tags: input.tags,
+        limit: input.limit ?? 20,
+      });
+      return {
+        mode: "list" as const,
+        entries: entries.map(e => ({
+          ...withoutSourceProvenance(e),
+          ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", e.id),
+        })),
+        totalFound: entries.length,
+      };
+    },
+  };
+}
+
+export const knowledgeReadStubImplementation: ToolImplementation<
+  KnowledgeReadInput,
+  KnowledgeReadOutput
+> = {
+  execute: async () => {
+    throw new Error(
+      "KnowledgeCapability not configured. Knowledge store access not available."
+    );
+  },
+};
+
+// ─── Bound Tool ──────────────────────────────────────────────────────────────
+
+export const knowledgeReadBoundTool: BoundTool<
+  typeof KNOWLEDGE_READ_NAME,
+  KnowledgeReadInput,
+  KnowledgeReadOutput,
+  KnowledgeReadRedacted
+> = {
+  contract: knowledgeReadContract,
+  implementation: knowledgeReadStubImplementation,
+};

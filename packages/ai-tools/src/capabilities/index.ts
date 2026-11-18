@@ -14,6 +14,8 @@
  * @public
  */
 
+// Account credits capability (account:read grant, task.5465)
+export type { AccountCreditsCapability, AccountCreditsInfo } from "./account-credits";
 // Hypothesis-loop capability (per knowledge-syntropy spec § The Hypothesis Loop)
 export type {
   ChainDirection,
@@ -29,6 +31,7 @@ export type {
 } from "./edo";
 // Knowledge capability (per knowledge-data-plane spec)
 export type {
+  ActiveGoalInfo,
   KnowledgeCapability,
   KnowledgeEntry,
   KnowledgeListParams,
@@ -75,9 +78,12 @@ export type {
 export type {
   CheckInfo,
   CiStatusResult,
+  CommitCompareResult,
+  CommitCompareStatus,
   CreateBranchResult,
   DispatchCandidateFlightResult,
   MergeResult,
+  PrFacts,
   PrSummary,
   VcsCapability,
 } from "./vcs";
@@ -94,9 +100,11 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemPatchScores,
+  WorkItemQueryPage,
   WorkItemQueryParams,
-  WorkItemTransitionResult,
 } from "./work-item";
+export { WorkItemPatchConflictError } from "./work-item";
 
 import type { AuthCapability, ClockCapability } from "./types";
 

@@ -36,7 +36,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
 }
 ```
 
-**External deps:** `drizzle-orm`, `postgres`, `type-fest`. Internal deps: `@cogni/db-schema` (ledger + identity tables), `@cogni/attribution-ledger`, `@cogni/scheduler-core`, `@cogni/ai-core`, `@cogni/ids`.
+**External deps:** `drizzle-orm`, `postgres`, `type-fest`. Internal deps: `@cogni/db-schema` (ledger + identity tables), `@cogni/attribution-ledger`, `@cogni/scheduler-core`, `@cogni/ai-core`, `@cogni/ids`, `@cogni/scheduling` (published readback/contracts alias).
 
 ## Public Surface
 
@@ -45,13 +45,14 @@ Database client factory and Drizzle adapter implementations for scheduling and l
   - `withTenantScope(db, actorId, fn)` — transaction wrapper setting RLS context
   - `setTenantContext(tx, actorId)` — sets RLS context in existing transaction
   - `Database`, `LoggerLike` — Drizzle client type (includes `$client: Sql` for pool control) and logger interface
+  - `DrizzleScheduleRunReader` — compatibility binding from app-role `db.$client` to published scheduling readback
   - `DrizzleScheduleUserAdapter`, `DrizzleScheduleWorkerAdapter` — schedule adapters (split by trust boundary)
   - `DrizzleExecutionGrantUserAdapter`, `DrizzleExecutionGrantWorkerAdapter` — grant adapters (split by trust boundary)
   - `DrizzleExecutionRequestAdapter`, `DrizzleGraphRunAdapter` (canonical), `DrizzleScheduleRunAdapter` (deprecated alias)
   - `DrizzleAttributionAdapter` — ledger adapter (shared by app + worker, uses serviceDb/BYPASSRLS). Constructor takes `scopeId`; all epochId-based methods enforce scope via `resolveEpochScoped()`, and settlement lifecycle reads require matching node + scope (SCOPE_GATED_QUERIES).
   - Re-exports from `@cogni/db-schema` (tables, types)
 - **Exports (sub-path `@cogni/db-client/service`):**
-  - `createServiceDbClient(url)` — client factory for `app_service` role (BYPASSRLS)
+  - `createServiceDbClient(url, options?)` — client factory for `app_service` role (BYPASSRLS)
 - **Env/Config keys:** none (accepts DATABASE_URL via factory parameter)
 - **Files considered API:** `index.ts` (root), `service.ts` (sub-path)
 
@@ -81,7 +82,7 @@ pnpm --filter @cogni/db-client build
 
 ## Dependencies
 
-- **Internal:** `@cogni/db-schema`, `@cogni/attribution-ledger`, `@cogni/scheduler-core`, `@cogni/ai-core`, `@cogni/ids`
+- **Internal:** `@cogni/db-schema`, `@cogni/attribution-ledger`, `@cogni/scheduler-core`, `@cogni/ai-core`, `@cogni/ids`, `@cogni/scheduling` (published readback/contracts alias).
 - **External:** `drizzle-orm`, `postgres`, `type-fest`
 
 ## Change Protocol
@@ -100,4 +101,4 @@ pnpm --filter @cogni/db-client build
 
 Pool options inject a positive integer `max` and optional `applicationName`. Generic defaults remain 10; owning runtimes choose their aggregate role budgets.
 
-Last reviewed: 2026-10-26 (task.5356; app-role-only port of Red PR34; bug.5541).
+Last reviewed: 2026-10-24 (bug.5529).

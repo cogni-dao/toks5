@@ -28,9 +28,9 @@ Capability factories bridging ai-tools interfaces to adapters. Creates environme
 
 ## Public Surface
 
-- **Exports:** `createMetricsCapability()`, `stubMetricsCapability`, `createRepoCapability()`, `stubRepoCapability`, `createWebSearchCapability()`, `createMoveMetricPorts()` (work-items `moves` ports over the metrics service, story.0033), `createCitationLinksPort()` / `readCitationLinksPage()` (the one citation-links read for the UI, `?include=links` and `core__work_item_read`, task.0118)
+- **Exports:** `createMetricsCapability()`, `stubMetricsCapability`, `createRepoCapability()`, `stubRepoCapability`, `createWebSearchCapability()`
 - **Env/Config keys:** PROMETHEUS_REMOTE_WRITE_URL, PROMETHEUS_QUERY_URL, PROMETHEUS_READ_USERNAME, PROMETHEUS_READ_PASSWORD, COGNI_REPO_PATH, COGNI_REPO_ROOT, TAVILY_API_KEY via ServerEnv
-- **Files considered API:** `metrics.ts`, `repo.ts`, `web-search.ts`, `work-item-moves.ts`, `citation-links.ts`
+- **Files considered API:** `metrics.ts`, `repo.ts`, `web-search.ts`
 
 ## Responsibilities
 
@@ -60,5 +60,3 @@ Capability factories bridging ai-tools interfaces to adapters. Creates environme
 ## Notes
 
 - Pattern: test mode uses fake adapter, prod requires env vars or returns stub
-
-- Work-item evaluation uses principal-bound live content writes; v1 leases/DELETE stay on an exact legacy adapter, projecting only claim fields.

@@ -12,31 +12,50 @@
  *   - NODE_BUNDLE_IS_CANONICAL: Resolves BoundTool from injected node bundle (CORE_TOOL_BUNDLE [+ POLY_TOOL_BUNDLE for poly]); never iterates the global TOOL_CATALOG (which is per-package and can drift behind per-node bundles).
  *   - DENY_BY_DEFAULT: Tool policy explicitly provided per graph
  *   - MCP_VIA_ASYNC_SOURCE: MCP tools resolved via async getMcpToolSource() function (shared cache with reconnect-on-error)
+ *   - SECRET_ARGS_MASK_MODEL_CALLS: a run that offers any tool whose contract declares `secretArgs` masks every model
+ *     call of that run (`maskContent` on the LlmCaller), because the model's own tool call and the next call that resends
+ *     it carry the raw argument to the gateway's Langfuse logger. The flag is run-scoped and set once the offered tools are known.
+ *   - CATALOG_REPORT_SEAM: a catalog entry's `report` (not a graph name) decides whether the run's structured
+ *     telemetry is logged as registered events and echoed onto the stream; graphs never touch the logger or ALS.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
  * Notes: Discovery is in LangGraphInProcAgentCatalogProvider, not here.
  * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants
  * @internal
  */
 
+import {
+  type GuardDeps,
+  guardTools,
+  offeredToolIds,
+  type RunIdentity,
+  type TerminalDenial,
+  type ToolRequires,
+} from "@cogni/agent-grants";
 import type { AiEvent, BoundToolRuntime, ToolSourcePort } from "@cogni/ai-core";
 import {
   createStaticToolSourceFromRecord,
   createToolAllowlistPolicy,
   createToolRunner,
 } from "@cogni/ai-core";
-import type { CatalogBoundTool } from "@cogni/ai-tools";
+import { type CatalogBoundTool, declaresSecretArgs } from "@cogni/ai-tools";
 import {
   type CompletionFn,
   type CreateGraphFn,
   createInProcGraphRunner,
+  type GraphReportDecl,
   type GraphResult,
+  graphReportDelta,
+  graphReportLogFields,
   type InProcGraphRequest,
   LANGGRAPH_CATALOG,
   type ToolExecFn,
 } from "@cogni/langgraph-graphs";
 import { trace } from "@opentelemetry/api";
 import type { Logger } from "pino";
-import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
+import {
+  getExecutionScope,
+  runInScope,
+} from "@/adapters/server/ai/execution-scope";
 import type {
   AiExecutionErrorCode,
   CompletionFinalResult,
@@ -46,9 +65,9 @@ import type {
   GraphRunRequest,
   GraphRunResult,
   LlmToolDefinition,
-  Message,
 } from "@/ports";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+import { isModelAllowed } from "@/shared/ai/model-catalog.server";
 
 import type { CompletionUnitParams } from "../inproc-completion-unit.adapter";
 
@@ -79,9 +98,39 @@ interface ProviderCatalogEntry {
   readonly description: string;
   readonly toolIds: readonly string[];
   readonly mcpServerIds?: readonly string[];
+  /** Internal agent principal slug this graph acts as (catalog `principal`). */
+  readonly principal?: string;
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
+  readonly program?: "cogni" | "work-review" | "work-closeout";
+  /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
+  readonly report?: GraphReportDecl;
 }
+
+/**
+ * The node's tool-authority wiring (bootstrap/agent-authority.ts), seen structurally so adapters do not
+ * import bootstrap. Absent means no principal can be resolved and every scoped tool is denied.
+ */
+export interface ProviderAgentAuthority {
+  /** The seeded user id for a catalog principal slug, or null when no row exists. */
+  resolvePrincipal(slug: string): Promise<string | null>;
+  readonly guardDeps: Omit<GuardDeps, "runAs">;
+}
+
+/** The one fixed outcome a denied run ends with (DENIAL_IS_TERMINAL). */
+function denialMessage(code: "policy_denied" | "authz_unavailable"): string {
+  return code === "authz_unavailable"
+    ? "I can't check my permissions right now, so I stopped. Try again later."
+    : "I don't have permission to do that on this node, so I stopped. Ask a node admin to allow it.";
+}
+
+/** With no authority wired, the guard can reach no store and no admin check: scoped tools deny. */
+const DENY_ALL_GUARD_DEPS: Omit<GuardDeps, "runAs"> = {
+  withStore: async () => {
+    throw new Error("agent_authority_not_configured");
+  },
+  adminCheck: async () => "unavailable",
+};
 
 /**
  * LangGraph in-process provider.
@@ -94,31 +143,73 @@ interface ProviderCatalogEntry {
  *
  * Note: Discovery (listAgents) is in LangGraphInProcAgentCatalogProvider.
  */
+export async function resolveNodeSourceContext(
+  required: boolean,
+  nodeId: string,
+  origin: string | undefined,
+  mission: string | null | undefined,
+  buildSha: string | undefined,
+  knowledge: { listGoverningIndex: () => Promise<NonNullable<NonNullable<import("@cogni/langgraph-graphs/inproc").CreateGraphOptions["sourceContext"]>["governingIndex"]>> } | undefined,
+) {
+  if (required && (!mission || !origin || !knowledge)) {
+    throw new Error("node_source_context_unavailable");
+  }
+  return {
+    nodeId,
+    ...(origin ? { origin } : {}),
+    ...(mission ? { mission: { content: mission, sourceRef: ".cogni/repo-spec.yaml", buildSha: buildSha ?? null } } : {}),
+    governingIndex: origin && knowledge ? await knowledge.listGoverningIndex() : [],
+  };
+}
+
 export class LangGraphInProcProvider implements GraphExecutorPort {
   readonly providerId = LANGGRAPH_PROVIDER_ID;
   private readonly log: Logger;
   private readonly catalog: LangGraphCatalog<CreateGraphFn>;
   private readonly boundToolMap: ReadonlyMap<string, CatalogBoundTool>;
+  /** Ids of node-bundle tools whose contract declares `secretArgs`. */
+  private readonly secretToolIds: ReadonlySet<string>;
 
   constructor(
     private readonly adapter: CompletionUnitAdapter,
     private readonly toolSource: ToolSourcePort,
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
-    nodeBundle: readonly CatalogBoundTool[] = []
+    nodeBundle: readonly CatalogBoundTool[] = [],
+    private readonly sourceContext?: (required: boolean) => Promise<
+      NonNullable<
+        import("@cogni/langgraph-graphs/inproc").CreateGraphOptions["sourceContext"]
+      >
+    >,
+    private readonly getPersistence?: () => Promise<
+      NonNullable<
+        import("@cogni/langgraph-graphs/inproc").InProcRunnerOptions["persistence"]
+      >
+    >,
+    private readonly authority?: ProviderAgentAuthority,
+    /** Graphs this node adds to the package catalog (never overrides a package entry). */
+    nodeCatalog: LangGraphCatalog<CreateGraphFn> = {},
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
+    this.secretToolIds = new Set(
+      nodeBundle
+        .filter((bt) => declaresSecretArgs(bt.contract))
+        .map((bt) => bt.contract.name),
+    );
 
-    // Use catalog from package (single source of truth)
-    this.catalog = LANGGRAPH_CATALOG as LangGraphCatalog<CreateGraphFn>;
+    // Use catalog from package (single source of truth), plus this node's own graphs
+    this.catalog = {
+      ...nodeCatalog,
+      ...(LANGGRAPH_CATALOG as LangGraphCatalog<CreateGraphFn>),
+    };
 
     this.log.debug(
       {
         graphCount: Object.keys(this.catalog).length,
         graphs: Object.keys(this.catalog),
       },
-      "LangGraphInProcProvider initialized"
+      "LangGraphInProcProvider initialized",
     );
   }
 
@@ -128,7 +219,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     const scope = getExecutionScope();
     const requestId = ctx?.requestId ?? req.runId;
 
-    // Extract graph name from graphId (e.g., "langgraph:poet" → "poet")
+    // Extract graph name from graphId (e.g., "langgraph:cogni" → "cogni")
     const graphName = this.extractGraphName(graphId);
     if (!graphName) {
       this.log.error({ runId, graphId }, "Invalid graphId format");
@@ -145,11 +236,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
     this.log.debug(
       { runId, graphName, model, messageCount: messages.length },
-      "LangGraphInProcProvider.runGraph routing to package runner"
+      "LangGraphInProcProvider.runGraph routing to package runner",
     );
 
+    // Run-scoped mask flag: set once the offered tools are known (below), read on every model call.
+    const modelCallMask = { on: false };
+
     // Create completion function wrapping adapter
-    const completionFn = this.createCompletionFn(req);
+    const completionFn = this.createCompletionFn(req, modelCallMask);
 
     // P0 Contract: undefined => catalog default, [] => deny-all, [...] => exact
     const catalogToolIds = entry.toolIds;
@@ -157,7 +251,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     if (req.toolIds === undefined) {
       this.log.debug(
         { runId, graphName, catalogToolIds },
-        "toolIds undefined; using catalog default per P0 contract"
+        "toolIds undefined; using catalog default per P0 contract",
       );
     }
 
@@ -171,7 +265,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       } else {
         this.log.error(
           { runId, graphName, toolId },
-          "Tool not found in toolSource; graph misconfigured"
+          "Tool not found in toolSource; graph misconfigured",
         );
       }
     }
@@ -186,6 +280,47 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       stream: AsyncIterable<AiEvent>;
       final: Promise<GraphResult>;
     }> => {
+      // Principal lock: the catalog names the agent this graph acts as. No seed row denies the run
+      // before any tool runs (SCOPED_TOOL_NEEDS_PRINCIPAL; fail closed).
+      let principalId: string | undefined;
+      if (entry.principal) {
+        try {
+          principalId =
+            (await this.authority?.resolvePrincipal(entry.principal)) ??
+            undefined;
+        } catch (error) {
+          // The principal store is down: fail closed, and say so as `authz_unavailable` (not a generic internal error).
+          this.log.error(
+            {
+              event: EVENT_NAMES.AGENT_TOOL_AUTHZ,
+              runId,
+              graphName,
+              principal: entry.principal,
+              decision: "unavailable",
+              code: "authz_unavailable",
+              reason: "principal_lookup_failed",
+              errorName: error instanceof Error ? error.name : "unknown",
+            },
+            "graph principal lookup failed; run denied",
+          );
+          throw error;
+        }
+        if (!principalId) {
+          this.log.error(
+            {
+              event: EVENT_NAMES.AGENT_TOOL_AUTHZ,
+              runId,
+              graphName,
+              principal: entry.principal,
+              decision: "deny",
+              code: "policy_denied",
+              reason: "principal_not_seeded",
+            },
+            "graph principal has no seed row; run denied",
+          );
+          throw new Error("agent_principal_not_seeded");
+        }
+      }
       const mcpToolIds: string[] = [];
       if (mcpServerIds.length > 0) {
         const mcpToolSource = await this.getMcpToolSource();
@@ -209,26 +344,125 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 mcpServerIds,
                 mcpToolCount: mcpToolIds.length,
               },
-              "Resolved MCP tools for graph"
+              "Resolved MCP tools for graph",
             );
           }
         }
       }
 
+      // The contracts' `requires` are the only input that names scopes. An MCP tool has none yet, so it is
+      // denied (it is external_side_effect) until MCP server scopes merge into requiresById.
+      const requiresById: Record<string, ToolRequires> = {};
+      for (const [id, bound] of this.boundToolMap) {
+        if (bound.contract.requires) requiresById[id] = bound.contract.requires;
+      }
+      const guardScope = {
+        runId,
+        principalId,
+        subjectUserId: scope.subjectUserId,
+        // The account the run acts on (R13): an account-kind tool opens only for a principal with a live row for exactly this account.
+        accountId: scope.billing.billingAccountId,
+        payer: scope.billing.billingAccountId,
+      };
+      const guardBase = this.authority?.guardDeps ?? DENY_ALL_GUARD_DEPS;
+
+      // DENIAL_IS_TERMINAL (1/2): the model is never offered a tool whose principal lock already fails.
+      const { offered, excluded } = await offeredToolIds(
+        Object.entries(runtimeTools).map(([id, rt]) => ({
+          id,
+          effect: rt.spec.effect,
+        })),
+        requiresById,
+        guardScope,
+        guardBase
+      );
+      const offeredSet = new Set(offered);
+
+      if (entry.program && !this.sourceContext) {
+        throw new Error("node_source_context_unavailable");
+      }
+
+      // A run with no interactive caller (a validated schedule tick, or one with no subject such as a webhook) whose
+      // every write tool is withheld has nothing it may do: end it now, with no model call, instead of paying for a
+      // "no permission" answer on every tick. An interactive run keeps the system note below and may answer once.
+      const writeTools = Object.entries(runtimeTools).filter(
+        ([, rt]) => rt.spec.effect !== "read_only"
+      );
+      const noInteractiveCaller =
+        ctx?.unattended === true || !scope.subjectUserId;
+      const endWithoutModel =
+        noInteractiveCaller &&
+        writeTools.length > 0 &&
+        writeTools.every(([id]) => !offeredSet.has(id));
+      for (const id of Object.keys(runtimeTools)) {
+        if (!offeredSet.has(id)) delete runtimeTools[id];
+      }
+      const offeredToolIdList = toolIds.filter((id) => offeredSet.has(id));
+      const offeredMcpToolIds = mcpToolIds.filter((id) => offeredSet.has(id));
+
       // Combined tool IDs for allowlist: native catalog tools + MCP tools
-      const allToolIds = [...toolIds, ...mcpToolIds];
+      const allToolIds = [...offeredToolIdList, ...offeredMcpToolIds];
+
+      // SECRET_ARGS_MASK_MODEL_CALLS: any offered secret tool masks every model call of this run.
+      modelCallMask.on = offeredToolIdList.some((id) =>
+        this.secretToolIds.has(id),
+      );
 
       // Get catalog tools for contract extraction from the injected node bundle
       // (per NODE_BUNDLE_IS_CANONICAL — TOOL_CATALOG only has core tools post-bug.0319 ckpt 2)
       const catalogTools = catalogToolIds
+        .filter((id) => offeredSet.has(id))
         .map((id) => this.boundToolMap.get(id))
         .filter((bt): bt is NonNullable<typeof bt> => bt !== undefined);
+
+      // DENIAL_IS_TERMINAL (2/2): an exec-time denial ends the run cleanly. The run's abort signal chains the caller's.
+      const runAbort = new AbortController();
+      const callerSignal = scope.abortSignal;
+      if (callerSignal) {
+        if (callerSignal.aborted) runAbort.abort(callerSignal.reason);
+        else
+          callerSignal.addEventListener(
+            "abort",
+            () => runAbort.abort(callerSignal.reason),
+            { once: true }
+          );
+      }
+      let terminal: TerminalDenial | null = null;
+      let modelCalls = 0;
+      let modelCallsAfterDenial = 0;
+      const countedCompletionFn: typeof completionFn = (params) => {
+        modelCalls += 1;
+        if (terminal) modelCallsAfterDenial += 1;
+        return completionFn(params);
+      };
 
       // Create tool execution function factory
       // Policy allowlist includes both native and MCP tool IDs
       const createToolExecFn = (emit: (e: AiEvent) => void): ToolExecFn => {
         const policy = createToolAllowlistPolicy(allToolIds);
-        const source = createStaticToolSourceFromRecord(runtimeTools);
+        // GUARD_COVERS_EVERY_RUNNER_SITE: every runtime (native + MCP) passes through the guard.
+        const guarded = guardTools(runtimeTools, requiresById, guardScope, {
+          ...guardBase,
+          onTerminalDenial: (denial) => {
+            if (terminal) return;
+            terminal = denial;
+            runAbort.abort(new Error("agent_tool_denied"));
+          },
+          runAs: (identity: RunIdentity, fn) =>
+            runInScope(
+              {
+                ...scope,
+                ...(identity.principalId
+                  ? { principalId: identity.principalId }
+                  : {}),
+                ...(identity.subjectUserId
+                  ? { subjectUserId: identity.subjectUserId }
+                  : {}),
+              },
+              fn
+            ),
+        });
+        const source = createStaticToolSourceFromRecord(guarded);
         const toolRunner = createToolRunner(source, emit, {
           policy,
           ctx: { runId },
@@ -242,6 +476,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 })
               : await toolRunner.exec(name, args);
           if (!result.ok) {
+            // A secret tool's error text is scrubbed, but no text of it is logged: the code and receipt code suffice.
+            const secretTool = this.secretToolIds.has(name);
             this.log.warn(
               {
                 event: EVENT_NAMES.AI_TOOL_CALL_ERROR,
@@ -249,9 +485,13 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 graphName,
                 tool: name,
                 errorCode: result.errorCode,
-                safeMessage: result.safeMessage.slice(0, 300),
+                ...(secretTool
+                  ? result.receipt
+                    ? { receiptCode: result.receipt.code }
+                    : {}
+                  : { safeMessage: result.safeMessage.slice(0, 300) }),
               },
-              "tool call failed"
+              "tool call failed",
             );
           }
           return result;
@@ -260,7 +500,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
       const toolContracts = catalogTools.map((bt) => bt.contract);
 
-      const mcpToolSpecs = mcpToolIds
+      const mcpToolSpecs = offeredMcpToolIds
         .map((id) => runtimeTools[id]?.spec)
         .filter((s): s is NonNullable<typeof s> => s !== undefined);
 
@@ -269,22 +509,78 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         "00000000000000000000000000000000";
       const runnerRequest: InProcGraphRequest = {
         runId,
-        messages: messages as InProcGraphRequest["messages"],
-        ...(scope.abortSignal !== undefined && {
-          abortSignal: scope.abortSignal,
-        }),
+        // A run that lost tools says so up front, so the model stops instead of hunting for another way (a
+        // denied run must not loop). Only tools the graph lists are named.
+        messages: (excluded.length > 0
+          ? [
+              {
+                role: "system",
+                content: `You have no permission to use: ${excluded.map((e) => e.tool).join(", ")}. If the task needs one of them, say so in one sentence and stop. Do not look for another way.`,
+              },
+              ...messages,
+            ]
+          : messages) as InProcGraphRequest["messages"],
+        abortSignal: runAbort.signal,
         ...(traceId !== undefined && { traceId }),
         ...(requestId !== undefined && { ingressRequestId: requestId }),
-        configurable: { model, toolIds },
+        configurable: { model, toolIds: offeredToolIdList },
       };
 
-      return createInProcGraphRunner({
+      if (entry.program && !this.sourceContext) {
+        throw new Error("node_source_context_unavailable");
+      }
+      // Resolve the node source first so a mission graph still fails closed when its hub context is missing.
+      const resolvedSource =
+        entry.program && this.sourceContext
+          ? await this.sourceContext(Boolean(entry.program))
+          : undefined;
+      if (endWithoutModel) {
+        const code = excluded.every((e) => e.code === "authz_unavailable")
+          ? ("authz_unavailable" as const)
+          : ("policy_denied" as const);
+        this.log.warn(
+          {
+            event: EVENT_NAMES.AGENT_RUN_DENIED,
+            runId,
+            graphName,
+            principal: entry.principal ?? null,
+            tools: writeTools.map(([id]) => id),
+            code,
+            reason: "no_permission",
+            modelCalls: 0,
+            modelCallsAfterDenial: 0,
+          },
+          "run ended without a model call: every write tool is withheld"
+        );
+        const text = denialMessage(code);
+        return {
+          stream: (async function* () {
+            yield { type: "text_delta" as const, delta: text };
+            yield { type: "assistant_final" as const, content: text };
+            yield { type: "done" as const } as AiEvent;
+          })(),
+          final: Promise.resolve({
+            ok: true,
+            finishReason: "stop",
+            content: text,
+          } as GraphResult),
+        };
+      }
+      const inner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
-        completionFn,
+        completionFn: countedCompletionFn,
         createToolExecFn,
         toolContracts,
         ...(mcpToolSpecs.length > 0 && { mcpToolSpecs }),
         request: runnerRequest,
+        ...(entry.program &&
+          this.getPersistence && {
+            persistence: await this.getPersistence(),
+          }),
+        ...(entry.program !== undefined && { program: entry.program }),
+        ...(ctx?.actorUserId ? { trustedActorId: ctx.actorUserId } : {}),
+        ...(entry.program && { trustedProgramId: entry.program }),
+        ...(resolvedSource !== undefined && { sourceContext: resolvedSource }),
         ...(req.responseFormat !== undefined && {
           responseFormat: req.responseFormat,
         }),
@@ -292,12 +588,38 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           systemPrompt: entry.systemPrompt,
         }),
       });
+      const runner = this.endDeniedRunCleanly(inner, {
+        runId,
+        graphName,
+        principal: entry.principal ?? null,
+        denial: () => terminal,
+        modelCalls: () => ({ modelCalls, modelCallsAfterDenial }),
+      });
+      // CatalogEntry.report: the graph's own report → registry events (graphs have no logger).
+      const report = entry.report;
+      if (report) {
+        void runner.final
+          .then((result) => {
+            for (const fields of graphReportLogFields(
+              report,
+              runId,
+              result.structuredOutput,
+            )) {
+              this.log.info(fields, "graph report");
+            }
+          })
+          .catch(() => {
+            // Run failure is already logged by the inproc error path.
+          });
+      }
+      return runner;
     };
 
     // Execute: resolve MCP (if needed) then run graph.
     // Returns {stream, final} synchronously per GraphRunResult contract;
     // the inner async generator awaits the promise.
     const innerResult = resolveMcpAndExecute();
+    const report = entry.report;
 
     const stream = (async function* () {
       let inner: Awaited<ReturnType<typeof resolveMcpAndExecute>>;
@@ -311,7 +633,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         yield { type: "done" as const };
         return;
       }
-      yield* inner.stream;
+      for await (const event of inner.stream) {
+        // CatalogEntry.report: echo the telemetry as one text delta just before `done`.
+        if (event.type === "done" && report) {
+          const delta = graphReportDelta((await inner.final).structuredOutput);
+          if (delta) yield { type: "text_delta" as const, delta };
+        }
+        yield event;
+      }
     })();
 
     const final = innerResult.then(
@@ -322,7 +651,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           runId,
           requestId,
           error: "internal",
-        }) as const
+        }) as const,
     );
 
     // mapToGraphFinal returns Promise<GraphFinal>, so final is Promise<Promise<GraphFinal> | GraphFinal>
@@ -333,8 +662,73 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
   }
 
   /**
+   * DENIAL_IS_TERMINAL. When the guard denied a tool, the run was aborted (see `onTerminalDenial`). The runner reports an
+   * abort as an error; this turns it into a clean completion: no error event, one fixed assistant message, `final.ok`.
+   * Logs one `agent_run.denied` event with the model-call counts. A run with no denial passes through untouched.
+   */
+  private endDeniedRunCleanly(
+    inner: { stream: AsyncIterable<AiEvent>; final: Promise<GraphResult> },
+    info: {
+      runId: string;
+      graphName: string;
+      principal: string | null;
+      denial: () => TerminalDenial | null;
+      modelCalls: () => { modelCalls: number; modelCallsAfterDenial: number };
+    }
+  ): { stream: AsyncIterable<AiEvent>; final: Promise<GraphResult> } {
+    const log = this.log;
+    const message = (denial: TerminalDenial) => denialMessage(denial.code);
+    let logged = false;
+    const logOnce = (denial: TerminalDenial) => {
+      if (logged) return;
+      logged = true;
+      log.warn(
+        {
+          event: EVENT_NAMES.AGENT_RUN_DENIED,
+          runId: info.runId,
+          graphName: info.graphName,
+          principal: info.principal,
+          tool: denial.tool,
+          code: denial.code,
+          reason: denial.reason,
+          ...info.modelCalls(),
+        },
+        "run ended cleanly after a tool denial"
+      );
+    };
+    const stream = (async function* () {
+      let sawFinal = false;
+      for await (const event of inner.stream) {
+        const denial = info.denial();
+        if (denial && event.type === "error") continue; // the abort we caused
+        if (event.type === "assistant_final") sawFinal = true;
+        if (denial && event.type === "done") {
+          if (!sawFinal) {
+            yield { type: "text_delta" as const, delta: message(denial) };
+            yield { type: "assistant_final" as const, content: message(denial) };
+          }
+          logOnce(denial);
+        }
+        yield event;
+      }
+    })();
+    const final = inner.final.then((result): GraphResult => {
+      const denial = info.denial();
+      if (!denial) return result;
+      logOnce(denial);
+      if (result.ok) return result;
+      return {
+        ok: true,
+        finishReason: "stop",
+        content: message(denial),
+      };
+    });
+    return { stream, final };
+  }
+
+  /**
    * Extract graph name from namespaced graphId.
-   * Per GRAPH_ID_NAMESPACED: "langgraph:poet" → "poet"
+   * Per GRAPH_ID_NAMESPACED: "langgraph:cogni" → "cogni"
    */
   private extractGraphName(graphId: string): string | undefined {
     const prefix = `${this.providerId}:`;
@@ -349,37 +743,48 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
    * Create completion function wrapping adapter.executeCompletionUnit.
    */
   private createCompletionFn(
-    req: GraphRunRequest
+    req: GraphRunRequest,
+    modelCallMask: { readonly on: boolean },
   ): CompletionFn<LlmToolDefinition> {
     const { runId, graphId } = req;
     const attempt = 0; // P0_ATTEMPT_FREEZE
 
-    return (params: {
-      messages: Message[];
-      model: string;
-      tools?: readonly LlmToolDefinition[];
-      abortSignal?: AbortSignal;
-    }) => {
-      const result = this.adapter.executeCompletionUnit({
-        messages: params.messages as GraphRunRequest["messages"],
-        model: params.model,
-        runContext: { runId, attempt, graphId },
-        ...(params.abortSignal && { abortSignal: params.abortSignal }),
-        ...(params.tools?.length && { tools: [...params.tools] }),
-      });
+    return (params: Parameters<CompletionFn<LlmToolDefinition>>[0]) => {
+      const result = (async () => {
+        if (
+          params.model !== req.modelRef.modelId &&
+          (params.model !== "deepseek-v4-flash" ||
+            !(await isModelAllowed(params.model)))
+        )
+          throw new Error("cogni_child_model_not_authorized");
+        return this.adapter.executeCompletionUnit({
+          messages: params.messages as GraphRunRequest["messages"],
+          model: params.model,
+          runContext: { runId, attempt, graphId },
+          ...(params.abortSignal && { abortSignal: params.abortSignal }),
+          ...(params.tools?.length && { tools: [...params.tools] }),
+          ...(params.toolChoice !== undefined && { toolChoice: params.toolChoice }),
+          // Read per call: the flag is set after the offered tools are known, before the first model call.
+          ...(modelCallMask.on && { maskContent: true }),
+        });
+      })();
 
       return {
-        stream: result.stream,
-        final: result.final.then((r) => {
-          if (!r.ok) return { ok: false as const, error: r.error };
-          return {
-            ok: true as const,
-            content: r.content ?? "",
-            ...(r.toolCalls && { toolCalls: r.toolCalls }),
-            ...(r.usage && { usage: r.usage }),
-            ...(r.finishReason && { finishReason: r.finishReason }),
-          };
-        }),
+        stream: (async function* () {
+          yield* (await result).stream;
+        })(),
+        final: result
+          .then((unit) => unit.final)
+          .then((r) => {
+            if (!r.ok) return { ok: false as const, error: r.error };
+            return {
+              ok: true as const,
+              content: r.content ?? "",
+              ...(r.toolCalls && { toolCalls: r.toolCalls }),
+              ...(r.usage && { usage: r.usage }),
+              ...(r.finishReason && { finishReason: r.finishReason }),
+            };
+          }),
       };
     };
   }
@@ -393,7 +798,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     final: Promise<GraphResult>,
     runId: string,
     requestId: string,
-    graphName: string
+    graphName: string,
   ): Promise<GraphFinal> {
     const result = await final;
 
@@ -408,7 +813,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           errorMessage: result.errorMessage,
           event: EVENT_NAMES.ADAPTER_LANGGRAPH_INPROC_ERROR,
         },
-        EVENT_NAMES.ADAPTER_LANGGRAPH_INPROC_ERROR
+        EVENT_NAMES.ADAPTER_LANGGRAPH_INPROC_ERROR,
       );
 
       // Direct passthrough - GraphResult.error is already AiExecutionErrorCode
@@ -436,7 +841,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
   private createErrorResult(
     runId: string,
     requestId: string,
-    code: AiExecutionErrorCode = "internal"
+    code: AiExecutionErrorCode = "internal",
   ): GraphRunResult {
     const errorStream = (async function* () {
       yield { type: "error" as const, error: code };

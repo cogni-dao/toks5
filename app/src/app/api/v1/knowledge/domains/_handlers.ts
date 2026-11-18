@@ -3,16 +3,20 @@
 
 /**
  * Module: `@app/api/v1/knowledge/domains/_handlers`
- * Purpose: HTTP handlers for the knowledge domain registry — list, register, read, update, and delete-if-empty, mapping typed errors to HTTP statuses.
- * Scope: Toks5-owned HTTP wiring only. Does not contain business logic, validation, or storage I/O — those live in the port/adapter.
+ * Purpose: HTTP handlers for the knowledge domain registry — list, register, and the item-scoped get / update / delete-if-empty, mapping typed errors to HTTP statuses.
+ * Scope: Operator-side wiring only. Does not contain business logic, validation, or storage I/O — those live in the port/adapter.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_LIST_REQUIRES_PRINCIPAL
  *   (any authenticated principal — session human or bearer agent — may list
- *   domains, mirroring KNOWLEDGE_READ_REQUIRES_PRINCIPAL on /knowledge),
- *   DOMAIN_REGISTER_BEARER_OR_SESSION (federation: external bearer agents may
+ *   domains, mirroring KNOWLEDGE_READ_NEEDS_GRANT on /knowledge),
+ *   DOMAIN_REGISTER_NEEDS_CONTRIBUTE (federation: external bearer agents holding knowledge:contribute may
  *   register a domain on-demand so that downstream writes — knowledge
  *   contributions, EDO hypothesize/decide/record-outcome — can proceed against
  *   the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant without requiring a UI
- *   roundtrip).
+ *   roundtrip), DOMAIN_READ_REQUIRES_PRINCIPAL (item GET mirrors list),
+ *   DOMAIN_MUTATION_HUMAN_ONLY (item PATCH/DELETE: any signed-in human;
+ *   a bearer agent is refused by the wrapper's deny-by-default, bug.0045, until
+ *   a door is declared; register (POST) is behind the knowledge:contribute door),
+ *   DOMAIN_ID_IS_IMMUTABLE, DOMAIN_DELETE_REFUSES_NONEMPTY (409, never cascade).
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-domain-management, https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @internal
@@ -27,7 +31,7 @@ import {
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
 } from "@cogni/knowledge-store";
-
+import { BASE_DOMAIN_SEEDS } from "@cogni/knowledge-base";
 import {
   DomainsCreateRequestSchema,
   DomainsCreateResponseSchema,
@@ -54,9 +58,8 @@ export async function handleList(
 ): Promise<NextResponse> {
   if (!sessionUser)
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  // Any authenticated principal may list domains (DOMAIN_LIST_REQUIRES_PRINCIPAL).
-  // Bearer agents need the registry to recall + target writes, mirroring
-  // KNOWLEDGE_READ_REQUIRES_PRINCIPAL on /knowledge.
+  // The route's knowledge.read door already ran: a human, or a bearer with the knowledge:read role.
+  // (KNOWLEDGE_READ_NEEDS_GRANT, as on /knowledge.)
   const p = port();
   if (!p)
     return NextResponse.json(
@@ -110,12 +113,19 @@ export async function handleCreate(
     if (e instanceof DomainAlreadyRegisteredError) {
       return NextResponse.json({ error: e.message }, { status: 409 });
     }
-    throw e;
+    // POST keeps its published busy body byte for byte (no errorCode); only
+    // the item routes carry the typed `knowledge_busy` code.
+    if (e instanceof KnowledgeBusyError)
+      return NextResponse.json(
+        { error: e.message, retryable: true },
+        { status: 503, headers: { "Retry-After": "2" } }
+      );
+    return mapDomainWriteError(e);
   }
 }
 
 /**
- * Typed knowledge-write failures for the item-scoped domain mutations. Returns the
+ * Typed knowledge-write failures shared by every domain mutation. Returns the
  * HTTP response for a known write failure, or rethrows an unknown error so the
  * route wrapper reports it as a 500.
  */
@@ -157,7 +167,10 @@ function mapDomainWriteError(e: unknown): NextResponse {
 type DomainLog = Pick<RequestContext["log"], "info">;
 
 /** A typed, contract-checked error body (DOMAIN_ERRORS_ARE_TYPED). */
-function domainError(status: number, body: DomainsErrorResponse): NextResponse {
+function domainError(
+  status: number,
+  body: DomainsErrorResponse
+): NextResponse {
   return NextResponse.json(DomainsErrorResponseSchema.parse(body), { status });
 }
 
@@ -279,9 +292,9 @@ export async function handleDelete(
   if (!input.success) return badDomainId(input.error.issues);
 
   const { domain } = input.data;
-  // Canonical baseline ids from approved domain CRUD policy. Keep protection
-  // node-local; this consumer does not depend on an unpublished knowledge-base package.
-  if (["meta", "mission", "strategy"].includes(domain))
+  // DOMAIN_BASELINE_IS_PROTECTED: every node inherits these shelves; seeding
+  // and orientation writes depend on them (DOMAIN_FK_ENFORCED_AT_WRITE).
+  if (BASE_DOMAIN_SEEDS.some((seed) => seed.id === domain))
     return domainError(409, {
       error: `domain '${domain}' is a baseline domain and cannot be deleted`,
       errorCode: "domain_protected",

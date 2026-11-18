@@ -5,7 +5,7 @@
  * Module: `@app/(app)/knowledge/_server/loaders`
  * Purpose: Server-side data loaders for the knowledge dashboard. ONE source of
  *   truth for shape + query logic, called by BOTH the HTTP route handlers
- *   (/api/v1/knowledge, /graph, /domains) and the server `page.tsx` that seeds
+ *   (/api/v1/knowledge, /domains) and the server `page.tsx` that seeds
  *   React Query `initialData`. Reading here (not via a self-HTTP fetch) is the
  *   house SSR idiom (see `(app)/nodes/page.tsx`) — no cookie forwarding needed.
  * Scope: Server only. Takes an injected KnowledgeStorePort; no env, no lifecycle.
@@ -16,25 +16,24 @@
  *   - PARALLEL_FANOUT: per-domain reads run concurrently (Promise.all), not the
  *     legacy serial `for … await` loop.
  *   - LIST_LIMIT_PARITY: caller passes the same params the client fetcher uses
- *     (the browse UI fetches `?limit=500`).
+ *     (the legacy Chains UI fetches `?limit=500`).
  * Side-effects: IO (Doltgres reads via the injected port)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @internal
  */
 
-import {
-  buildKnowledgeGraph,
-  type KnowledgeGraphModel,
-  type KnowledgeStorePort,
-  toKnowledgeRow,
-} from "@cogni/knowledge-store";
+import type { KnowledgeStorePort } from "@cogni/knowledge-store";
 import {
   type DomainsListResponse,
   DomainsListResponseSchema,
+  KnowledgeBrowsePageSchema,
+  type KnowledgeBrowseQuery,
   type KnowledgeListResponse,
   KnowledgeListResponseSchema,
   type KnowledgeRow,
 } from "@cogni/node-contracts";
+import { unstable_cache } from "next/cache";
+import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes.server";
 
 export interface KnowledgeListOpts {
   domain?: string | undefined;
@@ -43,7 +42,7 @@ export interface KnowledgeListOpts {
 }
 
 /**
- * Browse list across all (or one) domain. Mirrors GET /api/v1/knowledge exactly:
+ * Legacy full list across all (or one) domain. Mirrors GET /api/v1/knowledge exactly:
  * same field mapping, same cross-domain `limit` cutoff, same `domains` payload —
  * only the per-domain reads are parallelized.
  */
@@ -66,7 +65,7 @@ export async function loadKnowledgeList(
   for (const rows of perDomain) {
     for (const r of rows) {
       if (opts.sourceType && r.sourceType !== opts.sourceType) continue;
-      items.push(toKnowledgeRow(r));
+      items.push(toHttpKnowledgeRow(r));
       if (opts.limit != null && items.length >= opts.limit) break;
     }
     if (opts.limit != null && items.length >= opts.limit) break;
@@ -84,17 +83,39 @@ export async function loadDomains(
 }
 
 /**
- * Full graph model. Mirrors GET /api/v1/knowledge/graph but collapses the
- * legacy per-entry citation N+1 into a single `listAllCitations()` read, then
- * assembles nodes/edges via the shared `buildKnowledgeGraph`.
+ * Revision-keyed SSR cache (bug.5547). `force-dynamic` stays for the per-request
+ * auth check; only the store READ is cached, keyed by the Dolt head commit
+ * (`currentCommit()`) so repeat `/knowledge` refreshes are cache hits — zero
+ * body re-reads — while a contribution merge busts the cache the same request.
  */
-export async function loadKnowledgeGraph(
-  port: KnowledgeStorePort
-): Promise<KnowledgeGraphModel> {
-  const [domains, nodes, citations] = await Promise.all([
-    port.listDomains(),
-    port.listKnowledgeGraphNodes(),
-    port.listAllCitations(),
-  ]);
-  return buildKnowledgeGraph({ domains, nodes, citations });
+const KNOWLEDGE_CACHE_TAG = "knowledge";
+
+export async function loadKnowledgeListCached(
+  port: KnowledgeStorePort,
+  opts: KnowledgeListOpts = {}
+): Promise<KnowledgeListResponse> {
+  const rev = await port.currentCommit();
+  return unstable_cache(
+    () => loadKnowledgeList(port, opts),
+    ["knowledge-list", rev, JSON.stringify(opts)],
+    { tags: [KNOWLEDGE_CACHE_TAG] }
+  )();
+}
+
+/**
+ * SSR read deadline. Shorter than the adapter's lane deadline so a slow store
+ * falls back to the client fetch (via `safe()`) instead of blocking render.
+ */
+export const KNOWLEDGE_SSR_READ_TIMEOUT_MS = 3_000;
+
+/** Bounded initial reads: one observed HEAD plus metadata; no registry, bodies or citations. */
+export async function loadKnowledgeBrowse(
+  port: KnowledgeStorePort,
+  query: KnowledgeBrowseQuery = {}
+) {
+  return KnowledgeBrowsePageSchema.parse(
+    await port.browseKnowledge(query, {
+      signal: AbortSignal.timeout(KNOWLEDGE_SSR_READ_TIMEOUT_MS),
+    })
+  );
 }

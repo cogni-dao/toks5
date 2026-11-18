@@ -69,3 +69,5 @@ jobs:
         with:
           lane: component
           node_version: ${{ env.NODE_VERSION }}
+          # The component config excludes doltgres-*.int.test.ts; the real Doltgres engine gates them here (matches node-template).
+          doltgres_command: pnpm --filter @cogni/node-template-app test:doltgres

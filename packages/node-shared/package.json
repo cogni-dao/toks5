@@ -7,7 +7,20 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "browser": "./dist/browser.js",
       "import": "./dist/index.js"
+    },
+    "./ai/content-scrubbing": {
+      "types": "./dist/ai/content-scrubbing.d.ts",
+      "import": "./dist/ai/content-scrubbing.js"
+    },
+    "./observability/events": {
+      "types": "./dist/observability/events/index.d.ts",
+      "import": "./dist/observability/events/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
     }
   },
   "types": "./dist/index.d.ts",

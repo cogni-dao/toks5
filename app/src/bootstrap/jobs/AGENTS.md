@@ -28,10 +28,9 @@ Job modules that wire business logic to the application container for ops-trigge
 
 ## Public Surface
 
-- **Exports:** `runGovernanceSchedulesSyncJob()`
+- **Exports:** `runGovernanceSchedulesSyncJob({ throwIfLocked? })`
 - **CLI (if any):** `pnpm governance:schedules:sync` (calls internal ops route)
-- **Files considered API:** `syncGovernanceSchedules.job.ts`, `metrics-refresh.job.ts`
-- `metrics-refresh.job.ts` registers one scoped UTC-minute `NodeTaskWorkflow` schedule (`metrics:<nodeId>:refresh`) on the existing worker, reconciled once on boot with bounded retry, and delegates each dispatch to `goalMetrics.refreshDue`; it preserves pause state.
+- **Files considered API:** `syncGovernanceSchedules.job.ts`
 
 ## Ports (optional)
 
@@ -67,3 +66,5 @@ pnpm governance:schedules:sync  # POST /api/internal/ops/governance/schedules/sy
 ## Notes
 
 - Job files are exempted from `no-internal-adapter-imports` and `no-service-db-adapter-import` dep-cruiser rules
+
+metrics-refresh.job.ts registers one scoped UTC-minute NodeTaskWorkflow schedule and delegates each dispatch to goalMetrics.refreshDue; it preserves pause state.

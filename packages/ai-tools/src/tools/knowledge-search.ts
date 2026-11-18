@@ -1,19 +1,148 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Node facade: shared release implementation; RED policy stays in host composition. */
-export {
-  KnowledgeSearchInputSchema,
-  KnowledgeSearchOutputSchema,
-  KNOWLEDGE_SEARCH_NAME,
-  knowledgeSearchContract,
-  createKnowledgeSearchImplementation,
-  knowledgeSearchStubImplementation,
-  knowledgeSearchBoundTool,
-} from "@cogni/shared-ai-tools";
-export type {
+/**
+ * Module: `@cogni/ai-tools/tools/knowledge-search`
+ * Purpose: AI tool for searching the node's knowledge store by domain + text query.
+ * Scope: Read-only search with structured results. Does not write or commit.
+ * Invariants:
+ *   - TOOL_ID_NAMESPACED: ID is `core__knowledge_search`
+ *   - EFFECT_TYPED: effect is `read_only`
+ *   - HARD_BOUNDS: max 20 results
+ *   - BOUNDED_RESULTS: each result's `content` is truncated to KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS (≤20 hits ×
+ *     1500 chars), so one call can never return a multi-MB entry (bug.5518)
+ * Side-effects: IO (database read via capability)
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md
+ * @public
+ */
+
+import { z } from "zod";
+import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
+
+import type { KnowledgeCapability } from "../capabilities/knowledge";
+import type { BoundTool, ToolContract, ToolImplementation } from "../types";
+import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
+
+// ─── Schemas ─────────────────────────────────────────────────────────────────
+
+export const KnowledgeSearchInputSchema = z.object({
+  domain: z
+    .string()
+    .min(1)
+    .describe(
+      "Knowledge domain to search (e.g., 'prediction-market', 'infrastructure', 'meta')"
+    ),
+  query: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe(
+      "Text query — matches against title and content (case-insensitive)"
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum results (1-20, default 10)"),
+});
+export type KnowledgeSearchInput = z.infer<typeof KnowledgeSearchInputSchema>;
+
+export const KnowledgeSearchResultSchema = KnowledgeRowSchema.extend({
+  sourceUrl: z.string().url().optional(),
+  sourceUrlUnavailable: z.literal(true).optional(),
+});
+
+export const KnowledgeSearchOutputSchema = z.object({
+  query: z.string(),
+  domain: z.string(),
+  results: z.array(KnowledgeSearchResultSchema),
+  totalFound: z.number(),
+});
+export type KnowledgeSearchOutput = z.infer<typeof KnowledgeSearchOutputSchema>;
+export type KnowledgeSearchRedacted = KnowledgeSearchOutput;
+
+// ─── Contract ────────────────────────────────────────────────────────────────
+
+export const KNOWLEDGE_SEARCH_NAME = "core__knowledge_search" as const;
+
+export const knowledgeSearchContract: ToolContract<
+  typeof KNOWLEDGE_SEARCH_NAME,
   KnowledgeSearchInput,
   KnowledgeSearchOutput,
-  KnowledgeSearchRedacted,
-  KnowledgeSearchDeps,
-} from "@cogni/shared-ai-tools";
+  KnowledgeSearchRedacted
+> = {
+  name: KNOWLEDGE_SEARCH_NAME,
+  description:
+    "Search the node's knowledge store for domain-specific facts, claims, and curated assertions. " +
+    "Returns entries with confidence scores and canonical sourceUrl provenance for the content read. Search BEFORE using web search — " +
+    "the knowledge store contains verified, curated information relevant to this node's domain.",
+  effect: "read_only",
+  inputSchema: KnowledgeSearchInputSchema,
+  outputSchema: KnowledgeSearchOutputSchema,
+  redact: (output) => output,
+  allowlist: ["query", "domain", "results", "totalFound"] as const,
+};
+
+// ─── Implementation ──────────────────────────────────────────────────────────
+
+/** BOUNDED_RESULTS: max chars of each result's `content` (bug.5518). */
+export const KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS = 1500;
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+export interface KnowledgeSearchDeps {
+  knowledgeCapability: KnowledgeCapability;
+  /** Trusted node public origin supplied by server composition, never tool input. */
+  readonly nodePublicOrigin?: string | undefined;
+}
+
+export function createKnowledgeSearchImplementation(
+  deps: KnowledgeSearchDeps
+): ToolImplementation<KnowledgeSearchInput, KnowledgeSearchOutput> {
+  return {
+    execute: async (input) => {
+      const results = await deps.knowledgeCapability.search({
+        domain: input.domain,
+        query: input.query,
+        limit: input.limit ?? 10,
+      });
+      return {
+        query: input.query,
+        domain: input.domain,
+        results: results.map((r) => ({
+          ...withoutSourceProvenance(r),
+          content: truncate(r.content, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS),
+          ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", r.id),
+        })),
+        totalFound: results.length,
+      };
+    },
+  };
+}
+
+export const knowledgeSearchStubImplementation: ToolImplementation<
+  KnowledgeSearchInput,
+  KnowledgeSearchOutput
+> = {
+  execute: async () => {
+    throw new Error(
+      "KnowledgeCapability not configured. Knowledge store access not available."
+    );
+  },
+};
+
+// ─── Bound Tool ──────────────────────────────────────────────────────────────
+
+export const knowledgeSearchBoundTool: BoundTool<
+  typeof KNOWLEDGE_SEARCH_NAME,
+  KnowledgeSearchInput,
+  KnowledgeSearchOutput,
+  KnowledgeSearchRedacted
+> = {
+  contract: knowledgeSearchContract,
+  implementation: knowledgeSearchStubImplementation,
+};

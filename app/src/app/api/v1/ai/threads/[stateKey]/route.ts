@@ -6,7 +6,7 @@
  * Purpose: HTTP endpoint to load or delete a single thread by stateKey.
  * Scope: Validates stateKey param, delegates to threads facade. Does not access database directly.
  * Invariants: Thread scoped to authenticated user via RLS. Cache-Control: no-store on GET.
- * Side-effects: IO (reads/writes threads via ThreadPersistencePort)
+ * Side-effects: IO (reads/writes threads via ThreadPersistencePort; metadata-only read event)
  * Links: src/contracts/ai.threads.v1.contract.ts, src/app/_facades/ai/threads.server.ts
  * @public
  */
@@ -50,7 +50,6 @@ export const GET = wrapRouteHandlerWithLogging<{
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, _request, sessionUser, context) => {
-    const startedAt = performance.now();
     try {
       if (!context) throw new Error("context required for dynamic routes");
       const { stateKey } = await context.params;
@@ -64,28 +63,20 @@ export const GET = wrapRouteHandlerWithLogging<{
       });
 
       const output = loadThreadOperation.output.parse(result);
-      logEvent(ctx.log, EVENT_NAMES.AI_THREAD_READ, {
-        reqId: ctx.reqId,
-        routeId: ctx.routeId,
-        stateKey: input.stateKey,
-        count: output.messages.length,
-        status: 200,
-        outcome: output.messages.length ? "success" : "empty",
-        durationMs: performance.now() - startedAt,
-      });
-      return NextResponse.json(output, {
+      const response = NextResponse.json(output, {
         headers: { "Cache-Control": "no-store" },
       });
-    } catch (error) {
-      const errorResponse = handleRouteError(ctx, error);
       logEvent(ctx.log, EVENT_NAMES.AI_THREAD_READ, {
         reqId: ctx.reqId,
-        routeId: ctx.routeId,
-        status: errorResponse?.status ?? 500,
-        outcome: "error",
-        errorCode: errorResponse ? "THREAD_READ_INVALID" : "THREAD_READ_FAILED",
-        durationMs: performance.now() - startedAt,
+        routeId: "ai.threads.load",
+        status: 200,
+        outcome: "success",
+        stateKey: input.stateKey,
+        messageCount: output.messages.length,
       });
+      return response;
+    } catch (error) {
+      const errorResponse = handleRouteError(ctx, error);
       if (errorResponse) return errorResponse;
       throw error;
     }
@@ -97,6 +88,7 @@ export const DELETE = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "ai.threads.delete",
+    bearerWrite: "deletes only the caller's own thread (the facade scopes by the caller's identity)",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, _request, sessionUser, context) => {

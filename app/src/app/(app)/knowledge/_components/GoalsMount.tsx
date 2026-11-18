@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/(app)/knowledge/_components/GoalsMount`
- * Purpose: This node's mount of the Goals capability published by `@cogni/knowledge-base-ui/goals` (task.0062): the goal entry page's board and the measurement evidence. The Goals tab moved to the top-level Metrics page (`(app)/metrics`, story.0039).
+ * Purpose: This node's mount of the Goals capability published by `@cogni/knowledge-base-ui/goals` (task.0062): the goal entry page's board, the measurement evidence and the hypothesis KPI evidence. The Goals tab moved to the top-level Metrics page (`(app)/metrics`, story.0039).
  * Scope: Composition only. The package owns the board, chart, range control, evidence views, read client and poll contract. The node supplies one host (`NODE_GOALS_HOST` in `(app)/_components/goals-host.ts`: the package-default cookie-session client at `/api/v1/metrics`, Next's `Link` for client navigation) and the `?observation=` URL value. A fork that needs another client, `init`, `queryKeyPrefix` or `hrefs` changes only `NODE_GOALS_HOST`.
  * Invariants: ONE_CACHE_ENTRY (every component here sits under `KnowledgeGoalsProvider`, so they share one client and one key prefix with the Metrics page); no Goals markup, formatting or fetching lives in the app.
  * Side-effects: none beyond the package's GET reads
@@ -17,6 +17,8 @@ import {
   GoalsBoard,
   type GoalsBoardProps,
   GoalsProvider,
+  KpiEvidence,
+  type KpiEvidenceProps,
   MetricEvidence,
 } from "@cogni/knowledge-base-ui/goals";
 import { useSearchParams } from "next/navigation";
@@ -47,6 +49,15 @@ export function KnowledgeMetricEvidence({ id }: { readonly id: string }) {
         id={id}
         observationId={useSearchParams().get("observation")}
       />
+    </KnowledgeGoalsProvider>
+  );
+}
+
+/** A hypothesis' KPI evidence, from its stored bindings and the subject projection. */
+export function KnowledgeKpiEvidence(props: KpiEvidenceProps) {
+  return (
+    <KnowledgeGoalsProvider>
+      <KpiEvidence {...props} />
     </KnowledgeGoalsProvider>
   );
 }

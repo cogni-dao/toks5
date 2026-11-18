@@ -17,8 +17,8 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ContributionDiff } from "@/app/(app)/knowledge/_components/ContributionDiff";
 
-vi.mock("@/app/(app)/knowledge/_components/HtmlRenderer", () => ({
-  HtmlRenderer: ({ html }: { html: string }) => <div>{html}</div>,
+vi.mock("@/components", () => ({
+  Markdown: ({ content }: { content: string }) => <p>{content}</p>,
 }));
 vi.mock("next/link", () => ({
   default: ({
@@ -78,7 +78,7 @@ describe("ContributionDiff citations", () => {
     expect(within(section).getAllByRole("listitem")).toHaveLength(2);
     expect(
       within(section).getByRole("link", { name: "link + a-entry tracks task.0059" }).getAttribute("href")
-    ).toBe("/work?q=task.0059");
+    ).toBe("/work/items/task.0059");
     expect(
       within(section).getByRole("link", { name: "link − a-entry supports b-entry" }).getAttribute("href")
     ).toBe("/knowledge/b-entry");

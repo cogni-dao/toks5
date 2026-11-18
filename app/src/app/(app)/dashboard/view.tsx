@@ -54,10 +54,10 @@ import {
 } from "@/components/kit/data-display/activity-chart-utils";
 import type { RunCardData } from "@/components/kit/data-display/RunCard";
 import { fetchActivity } from "../activity/_api/fetchActivity";
-import { NODE_GOALS_HOST } from "../_components/goals-host";
 import { fetchWorkItem } from "../work/_api/fetchWorkItems";
 import { WorkItemDetail } from "../work/_components/WorkItemDetail";
 import { StatusPill, TypeIcon } from "../work/_components/work-item-icons";
+import { NODE_GOALS_HOST } from "../_components/goals-host";
 import { fetchRuns } from "./_api/fetchRuns";
 
 type Tab = "user" | "system";
@@ -498,6 +498,7 @@ export function DashboardView(): ReactElement {
         ) : null}
       </div>
 
+      {/* The detail's Moves block links goals and metrics with the node's client-navigation Link. */}
       <GoalsProvider {...NODE_GOALS_HOST}>
         <WorkItemDetail
           item={selectedWorkItem.data ?? null}

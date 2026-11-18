@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@instrumentation`
+ * Module: `@instrumentation/node`
  * Purpose: Next.js instrumentation hook — once-per-process startup orchestration.
  * Scope: Initialize OTel SDK and run preflight checks. Does NOT export SDK instance or run during build.
  * Invariants:
@@ -10,7 +10,7 @@
  *   - Must await sdk.start() and hard-fail in non-dev if startup fails
  *   - Service name via OTEL_SERVICE_NAME env var (not constructor option)
  *   - No auto-instrumentation for P0 (explicit spans only)
- *   - P0 has NO OTel exporter (IDs + Langfuse only; no Tempo/Grafana traces yet)
+ *   - P0 uses a no-op span processor and no OTel log exporter (IDs + Langfuse only)
  * Side-effects: IO (OTel SDK global state initialization)
  * Notes: Next.js calls register() once per Node.js process on startup.
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/ai-setup.md, bootstrap/otel.ts for span helpers
@@ -19,17 +19,24 @@
 
 import { NodeSDK, tracing } from "@opentelemetry/sdk-node";
 import pino from "pino";
-import {
-  resolveBootSyncConfig,
-  runGovernanceBootSync,
-} from "@/lib/governance-boot-sync";
 
 let sdk: NodeSDK | null = null;
 let sdkAttempt: Promise<void> | undefined;
 
+/** The existing startup Pino configuration also serves fatal diagnostics. */
 function makeBootLogger() {
-  return pino({ base: { app: "cogni-template", service: process.env.SERVICE_NAME ?? "app" },
-    messageKey: "msg", timestamp: pino.stdTimeFunctions.isoTime }, process.stdout);
+  return pino(
+    {
+      base: {
+        app: "cogni-template",
+        // biome-ignore lint/style/noProcessEnv: startup logger before config framework
+        service: process.env.SERVICE_NAME ?? "app",
+      },
+      messageKey: "msg",
+      timestamp: pino.stdTimeFunctions.isoTime,
+    },
+    process.stdout,
+  );
 }
 
 /**
@@ -43,15 +50,7 @@ function logAppStarted(): void {
   if (process.env.APP_ENV === "test" || process.env.VITEST === "true") {
     return;
   }
-  const bootLogger = pino({
-    base: {
-      app: "cogni-template",
-      // biome-ignore lint/style/noProcessEnv: startup log before config framework
-      service: process.env.SERVICE_NAME ?? "app",
-    },
-    messageKey: "msg",
-    timestamp: pino.stdTimeFunctions.isoTime,
-  });
+  const bootLogger = makeBootLogger();
   // biome-ignore lint/style/noProcessEnv: build-time plumbing injected via Dockerfile ARG
   const buildSha = process.env.APP_BUILD_SHA;
   if (buildSha) {
@@ -61,7 +60,7 @@ function logAppStarted(): void {
     // rather than cloaked behind a placeholder.
     bootLogger.warn(
       { buildSha: null },
-      "app started (APP_BUILD_SHA unset — check CI --build-arg BUILD_SHA)"
+      "app started (APP_BUILD_SHA unset — check CI --build-arg BUILD_SHA)",
     );
   }
 }
@@ -114,16 +113,26 @@ export async function initOtelSdk(options?: {
   }
 }
 
-/** Next may swallow preparation rejection: explicitly terminate fatal startup. */
-function fatalStartup(error: unknown): never {
-  try { makeBootLogger().error({ errorCode: "STARTUP_FATAL", phase: "initialization" }, "fatal startup failure"); } catch {}
+/** Fail explicitly: production Next catches rejected preparation without exiting. */
+function fatalStartup(
+  error: unknown,
+  phase: "initialization" | "startup_log",
+): never {
+  try {
+    makeBootLogger().error(
+      { errorCode: "STARTUP_FATAL", phase },
+      "fatal startup failure",
+    );
+  } catch {
+    // Logging must never prevent fatal termination or replace the original error.
+  }
   process.exit(1);
   throw error;
 }
 
 /**
  * Next.js instrumentation hook - called once per Node.js process.
- * Orchestrates OTel init + preflight checks.
+ * Awaits local preflight and mandatory tenant qualification before traffic admission.
  */
 export async function register(): Promise<void> {
   // Only initialize in Node.js runtime (allowlist, not denylist)
@@ -135,44 +144,49 @@ export async function register(): Promise<void> {
   let qualification: Promise<void> | undefined;
   try {
     await initOtelSdk();
-    const { localReadinessPreflight } = await import("./bootstrap/local-readiness-preflight");
+
+    // Only errors from this synchronous local phase permit diagnostic startup.
+    const { localReadinessPreflight } = await import(
+      "./bootstrap/local-readiness-preflight"
+    );
     const { EnvValidationError } = await import("./shared/env/server-env");
     const { RuntimeSecretError } = await import("./shared/env/invariants");
-    let valid = true;
+    let localConfigValid = true;
     try {
       localReadinessPreflight();
     } catch (error) {
-      if (!(error instanceof EnvValidationError || error instanceof RuntimeSecretError)) throw error;
-      valid = false;
+      if (
+        !(
+          error instanceof EnvValidationError ||
+          error instanceof RuntimeSecretError
+        )
+      )
+        throw error;
+      localConfigValid = false;
     }
-    if (valid) {
+    if (localConfigValid) {
       const { getContainer } = await import("./bootstrap/container");
-      const { startSystemTenantAssertionOnBoot } = await import("./bootstrap/startup-assertions");
-      qualification = startSystemTenantAssertionOnBoot(getContainer().serviceAccountService);
+      const { startSystemTenantAssertionOnBoot } = await import(
+        "./bootstrap/startup-assertions"
+      );
+      qualification = startSystemTenantAssertionOnBoot(
+        getContainer().serviceAccountService,
+      );
     }
   } catch (error) {
-    fatalStartup(error);
+    fatalStartup(error, "initialization");
   }
-  // Qualification logs and exits itself; preserve rejection without exiting twice.
+
+  // The qualification owner logs and exits on rejection; do not exit twice.
   await qualification;
   try {
     logAppStarted();
   } catch (error) {
-    fatalStartup(error);
-  }
-
-  // Self-register governance + ledger(epoch) Temporal schedules at boot, so a node (incl. a
-  // forked node-template) goes live without an operator/deploy-pipeline step. Replaces the
-  // removed `scripts/ci/deploy.sh` Step 10.1. Fire-and-forget + fail-soft; the helper retries
-  // while the HTTP server binds. Skipped in test.
-  // biome-ignore lint/style/noProcessEnv: startup check before the config framework
-  const bootEnv = process.env;
-  if (bootEnv.APP_ENV !== "test") {
-    void runGovernanceBootSync(resolveBootSyncConfig(bootEnv)).catch(() => {});
+    fatalStartup(error, "startup_log");
   }
 
   // Dev mode (not test): warn if LiteLLM has stale test config from a previous session.
-  // Inlined here (not in bootstrap/) because dep-cruiser forbids instrumentation→bootstrap imports.
+  // Keep this advisory check independent of mandatory qualification.
   // biome-ignore lint/style/noProcessEnv: startup check before config framework
   if (process.env.APP_ENV !== "test") {
     (async () => {
@@ -203,7 +217,7 @@ export async function register(): Promise<void> {
               "  ║  Fix: docker compose down litellm && pnpm dev:stack        ║",
               "  ╚══════════════════════════════════════════════════════════════╝",
               "",
-            ].join("\n")
+            ].join("\n"),
           );
         }
       } catch {

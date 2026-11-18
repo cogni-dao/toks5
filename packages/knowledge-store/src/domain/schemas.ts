@@ -1,0 +1,295 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/knowledge-store/domain/schemas`
+ * Purpose: Zod schemas and TypeScript types for the knowledge data plane.
+ * Scope: Pure validation schemas. Does not contain I/O or side effects.
+ * Invariants: SCHEMA_GENERIC_CONTENT_SPECIFIC — domain specificity in `domain` field + `tags`, not schema structure.
+ * Side-effects: none
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-store-schema
+ * @public
+ */
+
+import { z } from "zod";
+import { type KnowledgeRow, KnowledgeRowSchema } from "../contracts.js";
+
+// ---------------------------------------------------------------------------
+// Source types
+// ---------------------------------------------------------------------------
+
+export const SourceTypeSchema = z.enum([
+  "human",
+  "agent",
+  "analysis_signal",
+  "external",
+  "derived",
+]);
+export type SourceType = z.infer<typeof SourceTypeSchema>;
+
+// ---------------------------------------------------------------------------
+// Entry type — what KIND of knowledge a row represents within its domain.
+// The DB column is plain `text` (default 'finding'); this enum is the
+// recommended set per https://node-template.cognidao.org/knowledge/knowledge-store-schema and
+// https://node-template.cognidao.org/knowledge/edo-loop-contract. Adding values here is a doc + UI change, not a
+// schema migration.
+// ---------------------------------------------------------------------------
+
+export const EntryTypeSchema = z.enum([
+  // Four-beat hypothesis loop (codename EDO; see https://node-template.cognidao.org/knowledge/edo-loop-contract)
+  "event",
+  "hypothesis",
+  "decision",
+  "outcome",
+  // Non-temporal knowledge
+  "observation",
+  "finding",
+  "conclusion",
+  "rule",
+  "scorecard",
+  "skill",
+  "guide",
+  "html",
+  // DAO goal — a human commitment (Statement · KPI · Target · By), not a
+  // prediction: admin-merged via a plain contribution insert, excluded from
+  // confidence recompute, read through `listActiveGoals` (dao-goals-design).
+  "goal",
+]);
+export type EntryType = z.infer<typeof EntryTypeSchema>;
+
+/**
+ * Entry types that MUST carry `evaluate_at` (HYPOTHESIS_HAS_EVALUATE_AT): a
+ * hypothesis's appointment with truth, a goal's `By:` deadline.
+ */
+export const EVALUATE_AT_REQUIRED_ENTRY_TYPES: readonly string[] = [
+  "hypothesis",
+  "goal",
+];
+
+/** True when a row of this entry type must declare `evaluate_at`. */
+export function requiresEvaluateAt(
+  entryType: string | null | undefined
+): boolean {
+  return EVALUATE_AT_REQUIRED_ENTRY_TYPES.includes(entryType ?? "");
+}
+
+/**
+ * Entry types that MUST go through atomic `core__edo_*` tools.
+ * `core__knowledge_write` rejects rows whose `entry_type` is in this set.
+ * `event` is deliberately NOT in the set — events have no required citations
+ * and flow through `core__knowledge_write` unchanged.
+ */
+export const RAW_WRITE_REJECTS_TYPES: readonly EntryType[] = [
+  "hypothesis",
+  "decision",
+  "outcome",
+  // A goal is admin-merged through a contribution (GOAL_CHANGE_IS_NODE_ADMIN).
+  "goal",
+];
+
+// ---------------------------------------------------------------------------
+// Citation type — relationship between two knowledge rows
+// ---------------------------------------------------------------------------
+
+export const CitationTypeSchema = z.enum([
+  // Non-temporal knowledge edges
+  "supports",
+  "contradicts",
+  "extends",
+  "supersedes",
+  // Cross-plane work item ↔ knowledge tracking edge
+  "tracks",
+  // Hypothesis loop edges (see https://node-template.cognidao.org/knowledge/edo-loop-contract)
+  "evidence_for", // event/observation/finding → hypothesis (or decision)
+  "derives_from", // decision → hypothesis (strict)
+  "validates", // outcome → hypothesis (strict)
+  "invalidates", // outcome → hypothesis (strict)
+]);
+export type CitationType = z.infer<typeof CitationTypeSchema>;
+
+/** How a reader sees an edge: the citing side reads `outgoing`, the cited side reads `incoming`. */
+export type CitationTone = "positive" | "negative" | "warning" | "neutral" | "muted";
+
+export interface CitationTypeDefinition {
+  /** Label from the citing entry: "<citing> supports <cited>". */
+  readonly outgoing: string;
+  /** Label from the cited entry: "<cited> supported by <citing>". */
+  readonly incoming: string;
+  /** Visual weight; renderers map it to tokens and never branch on the type name. */
+  readonly tone: CitationTone;
+}
+
+/**
+ * CITATION_DIRECTION_IN_DEFINITION: every edge type owns both reading
+ * directions. Surfaces show `outgoing` or `incoming` from here and hold no
+ * wording of their own.
+ */
+export const CITATION_TYPE_DEFINITIONS = {
+  supports: { outgoing: "supports", incoming: "supported by", tone: "positive" },
+  contradicts: { outgoing: "contradicts", incoming: "contradicted by", tone: "negative" },
+  extends: { outgoing: "extends", incoming: "extended by", tone: "neutral" },
+  supersedes: { outgoing: "supersedes", incoming: "superseded by", tone: "warning" },
+  tracks: { outgoing: "tracks", incoming: "tracked by", tone: "muted" },
+  evidence_for: { outgoing: "evidence for", incoming: "evidenced by", tone: "positive" },
+  derives_from: { outgoing: "derives from", incoming: "basis for", tone: "neutral" },
+  validates: { outgoing: "validates", incoming: "validated by", tone: "positive" },
+  invalidates: { outgoing: "invalidates", incoming: "invalidated by", tone: "negative" },
+} as const satisfies Record<CitationType, CitationTypeDefinition>;
+
+/** The label and tone one side of an edge reads; unknown types read as their raw name. */
+export function describeCitation(
+  citationType: string,
+  direction: "out" | "in"
+): { readonly label: string; readonly tone: CitationTone } {
+  const definition = (
+    CITATION_TYPE_DEFINITIONS as Record<string, CitationTypeDefinition>
+  )[citationType];
+  if (!definition) return { label: citationType, tone: "muted" };
+  return {
+    label: direction === "out" ? definition.outgoing : definition.incoming,
+    tone: definition.tone,
+  };
+}
+
+export const WORK_ITEM_ENDPOINT_TYPES = [
+  "task",
+  "bug",
+  "spike",
+  "story",
+  "subtask",
+] as const;
+
+export type WorkItemEndpointType = (typeof WORK_ITEM_ENDPOINT_TYPES)[number];
+
+const WORK_ITEM_ENDPOINT_ID_RE = /^(task|bug|spike|story|subtask)\.\d+$/;
+
+export function isWorkItemEndpointId(id: string): boolean {
+  return WORK_ITEM_ENDPOINT_ID_RE.test(id);
+}
+
+/**
+ * Citation types that MUST point at a hypothesis row. The adapter's
+ * `EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE` check enforces this.
+ */
+export const HYPOTHESIS_TARGETED_EDGES: readonly CitationType[] = [
+  "derives_from",
+  "validates",
+  "invalidates",
+];
+
+/**
+ * Entry types each hypothesis-targeted edge may cite. A DAO goal (`entry_type
+ * 'goal'`, dao-goals-design) is the root a decision acts on, so `derives_from`
+ * may cite a goal as well as a hypothesis; `validates`/`invalidates` stay
+ * hypothesis-only (goal outcomes resolve through the goal layer).
+ */
+export function citedEntryTypesFor(type: CitationType): readonly string[] {
+  return type === "derives_from" ? ["hypothesis", "goal"] : ["hypothesis"];
+}
+
+// ---------------------------------------------------------------------------
+// Resolution strategy — namespaced text on hypothesis rows
+//
+// NULL = no automation (cron skips). Non-null = resolver kind. v0 ships
+// with `agent` only; future kinds (market:<id>, metric:<query>, http:<url>,
+// deadline) add new values, not new columns.
+// ---------------------------------------------------------------------------
+
+export const ResolutionStrategySchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(
+    /^[a-z][a-z0-9_]*(:[A-Za-z0-9_./~^-]+)?$/,
+    "resolution_strategy must be a namespaced identifier: 'agent' | 'kind:<value>' (e.g. market:0x123)"
+  );
+export type ResolutionStrategy = z.infer<typeof ResolutionStrategySchema>;
+
+// ---------------------------------------------------------------------------
+// Knowledge
+// ---------------------------------------------------------------------------
+
+export const KnowledgeSchema = KnowledgeRowSchema.extend({
+  id: z.string().min(1),
+  domain: z.string().min(1),
+  entityId: z.string().nullable().optional(),
+  title: z.string().min(1),
+  content: z.string().min(1),
+  useWhen: z.string().max(320).nullable().optional(),
+  entryType: z.string().min(1).optional(),
+  confidencePct: z.number().int().min(0).max(100).nullable().optional(),
+  sourceType: SourceTypeSchema,
+  sourceRef: z.string().nullable().optional(),
+  tags: z.array(z.string()).nullable().optional(),
+  evaluateAt: z.date().nullable().optional(),
+  resolutionStrategy: z.string().nullable().optional(),
+  createdAt: z.date().optional(),
+});
+
+export type Knowledge = z.infer<typeof KnowledgeSchema>;
+
+export const NewKnowledgeSchema = KnowledgeSchema.omit({ createdAt: true });
+export type NewKnowledge = z.infer<typeof NewKnowledgeSchema>;
+
+// ---------------------------------------------------------------------------
+// Citation — edge in the knowledge DAG
+// ---------------------------------------------------------------------------
+
+export const CitationSchema = z.object({
+  id: z.string().min(1),
+  citingId: z.string().min(1),
+  citedId: z.string().min(1),
+  citationType: CitationTypeSchema,
+  context: z.string().nullable().optional(),
+  createdAt: z.date().optional(),
+});
+
+export type Citation = z.infer<typeof CitationSchema>;
+
+export const NewCitationSchema = CitationSchema.omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  id: z.string().min(1).optional(), // server-derivable when omitted
+});
+
+export type NewCitation = z.infer<typeof NewCitationSchema>;
+
+// ---------------------------------------------------------------------------
+// Dolt versioning types
+// ---------------------------------------------------------------------------
+
+export const DoltCommitSchema = z.object({
+  commitHash: z.string(),
+  committer: z.string(),
+  email: z.string().optional(),
+  date: z.date().or(z.string()),
+  message: z.string(),
+});
+
+export type DoltCommit = z.infer<typeof DoltCommitSchema>;
+
+export const DoltDiffEntrySchema = z.object({
+  diffType: z.enum(["added", "modified", "removed"]),
+  fromId: z.string().nullable().optional(),
+  toId: z.string().nullable().optional(),
+  fromTitle: z.string().nullable().optional(),
+  toTitle: z.string().nullable().optional(),
+});
+
+export type DoltDiffEntry = z.infer<typeof DoltDiffEntrySchema>;
+
+export function toKnowledgeRow(entry: Knowledge): KnowledgeRow {
+  return {
+    ...entry,
+    entityId: entry.entityId ?? null,
+    useWhen: entry.useWhen ?? null,
+    entryType: entry.entryType ?? "finding",
+    confidencePct: entry.confidencePct ?? null,
+    sourceRef: entry.sourceRef ?? null,
+    tags: entry.tags ?? null,
+    evaluateAt: entry.evaluateAt ? entry.evaluateAt.toISOString() : null,
+    resolutionStrategy: entry.resolutionStrategy ?? null,
+    createdAt: entry.createdAt ? entry.createdAt.toISOString() : null,
+  };
+}

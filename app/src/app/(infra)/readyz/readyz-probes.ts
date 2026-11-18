@@ -3,34 +3,36 @@
 
 /**
  * Module: `@app/readyz/readyz-probes`
- * Purpose: toks5's consumer of `@cogni-dao/substrate-health` — the declared-dependency registry and the node
- *   closures that `/readyz?deep=1` consumes. The deep runner, failure type, reach-probe factories and
- *   drift-guard helper live in the package; this adapter wires them to this node's logger, error type, ports,
- *   env and declaration map.
- * Scope: Owns the node declaration map (`SUBSTRATE_DEPENDENCIES`), the EVM-RPC deep closure, the three node
- *   probe wrappers over the package factories, and the node-local drift-guard allowlist. Does not own the HTTP
- *   handler or shared response policy.
+ * Purpose: node-template's reference consumer of `@cogni-dao/substrate-health`: the declared-dependency registry
+ *   and the closures `/readyz?deep=1` runs. The readyz contract itself (`serveReadyz`), the deep runner, failure
+ *   type, reach-probe factories and drift-guard helper live in the package.
+ * Scope: Owns the declaration map (`SUBSTRATE_DEPENDENCIES`), the probe closures, the deep runtime and the
+ *   drift-guard allowlist. Does not own the HTTP handler. There is no default-path probe: the default /readyz
+ *   makes no remote calls (story.0040).
  * Invariants:
- *   - Imports are one-way: `route.ts` → this module → `@cogni/substrate-health` (never the reverse).
- *   - `?deep=1` probes exactly the dependencies this node DECLARES (`isDeclared`), each reach-only, fatal.
+ *   - Imports are one-way: `route.ts` → this module → `@cogni/substrate-health`.
+ *   - `?deep=1` probes exactly the dependencies this node DECLARES (`isDeclared`), concurrently, each reach-only,
+ *     fatal, under DEEP_CHECK_BUDGET_MS.
  *   - Deep registry order fixes first-failure `reason`/`message` and `unreachable[]`: evm-rpc, temporal,
  *     scheduler-worker, postgres, redis, litellm-gateway, doltgres.
- *   - Every substrate env key (`/_(URL|ADDRESS)$/`) is owned by a map entry or allowlisted; the drift guard
- *     fails CI otherwise.
- * Side-effects: IO (network reads to RPC/Temporal/LiteLLM/Redis, DB reads) only when a probe runs.
- * Links: src/app/(infra)/readyz/route.ts, @cogni-dao/substrate-health, deep-readyz-design
+ *   - Every substrate env key (`/_(URL|ADDRESS)$/`) is owned by a map entry or allowlisted; the drift guard fails
+ *     CI otherwise.
+ * Side-effects: IO (network reads to RPC/Temporal/LiteLLM/Redis/Doltgres, DB reads) only when a deep probe runs.
+ * Links: src/app/(infra)/readyz/route.ts, @cogni-dao/substrate-health, deep-readyz-design, story.0040
  * @public
  */
 
 import {
   type DeepChecks,
   DeepProbeFailure,
-  findUnclassifiedSubstrateKeys as pkgFindUnclassifiedSubstrateKeys,
+  type DeepRuntime,
   type ProbeDependency as PkgProbeDependency,
+  type SubstrateDependency as PkgSubstrateDependency,
+  findUnclassifiedSubstrateKeys as pkgFindUnclassifiedSubstrateKeys,
+  runDeepChecks as pkgRunDeepChecks,
   probeKnowledgePlane,
   probeLiteLlmGateway,
   probeRedisStream,
-  type SubstrateDependency as PkgSubstrateDependency,
   SUBSTRATE_ENV_KEY_PATTERN,
 } from "@cogni/substrate-health";
 import type { getContainer } from "@/bootstrap/container";
@@ -44,80 +46,79 @@ import {
 } from "@/shared/env/invariants";
 import type { RequestContext } from "@/shared/observability";
 
-// Re-exported from the package so `route.ts` keeps one import site and the
-// parity meta-test can assert the node uses the package's class by identity.
 export { type DeepChecks, DeepProbeFailure, SUBSTRATE_ENV_KEY_PATTERN };
 
 type Container = ReturnType<typeof getContainer>;
 type Env = ReturnType<typeof serverEnv>;
 
-/**
- * Deep-path budget for each dependency check. The checks run concurrently, so the
- * whole probe stays under this plus the response; it must stay below the 5 s deadline
- * of the fleet prober that reads `unreachable`.
- */
+/** Per-check deadline on `?deep=1`. */
 export const DEEP_CHECK_BUDGET_MS = 3000;
 
-/** A fixed, never-present id: a healthy knowledge plane returns null, a dead one throws. */
+/** A fixed id whose point read returns null on a healthy knowledge plane. */
 const DOLTGRES_READYZ_PROBE_ID = "readyz-probe-knowledge-reach";
-/** A fixed run id for the Redis XLEN reach probe; missing key returns 0. */
+/** A fixed run-stream key; `XLEN` of a missing key is 0. */
 const REDIS_READYZ_PROBE_KEY = "readyz:probe";
 
-/** This node's connectivity error, injected into the package's runner and probe factories. */
-const wrapInfra = (message: string): Error => new InfraConnectivityError(message);
+const wrapInfra = (message: string): Error =>
+  new InfraConnectivityError(message);
 
-/** Dependencies a deep 503 can name in `unreachable` (this node's probe-name union). */
+/** Dependencies a deep 503 can name in `unreachable` (the operator's probe-name union). */
 export type DeepDependency =
-  | "postgres"
+  | "evm-rpc"
   | "temporal"
   | "scheduler-worker"
-  | "evm-rpc"
+  | "postgres"
   | "redis"
   | "litellm-gateway"
   | "doltgres";
 
-/** Configure the shared runner with this node's logger and deadline. */
-export function deepRuntime(ctx: RequestContext) {
+/** The deep runner's logger, connectivity error and per-check budget for this node. */
+export function deepRuntime(ctx: RequestContext): DeepRuntime {
   return {
-    log: (fields: Record<string, unknown>, message: string) => ctx.log.info(fields, message),
-    timeoutError: (dependency: string, budgetMs: number) => new InfraConnectivityError(`${dependency} check exceeded ${budgetMs}ms budget`),
+    log: (fields, message) => ctx.log.info(fields, message),
+    timeoutError: (dependency, budgetMs) =>
+      new InfraConnectivityError(
+        `${dependency} check exceeded ${budgetMs}ms budget`,
+      ),
     budgetMs: DEEP_CHECK_BUDGET_MS,
   };
 }
 
-/**
- * EVM RPC deep check: forced live read, fatal on failure. The default probe path
- * is excluded from default readiness.
- */
-export async function checkEvmRpc(
+/** Run every declared check concurrently with this node's runtime. */
+export async function runDeepChecks(
+  ctx: RequestContext,
+  checks: ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]>,
+): Promise<DeepChecks> {
+  return pkgRunDeepChecks(checks, deepRuntime(ctx));
+}
+
+/** Forced live EVM RPC read; fatal on failure. */
+async function checkEvmRpc(
   _ctx: RequestContext,
   container: Container,
-  env: Env
+  env: Env,
 ): Promise<void> {
-  const evmRpcResult = await checkEvmRpcConnectivity(
+  const result = await checkEvmRpcConnectivity(
     container.evmOnchainClient,
     env,
-    { forceLive: true }
+    {
+      forceLive: true,
+    },
   );
-  if (!evmRpcResult.ok) {
-    const message = `EVM RPC connectivity check failed: ${evmRpcResult.errorMessage ?? "unknown"}`;
+  if (!result.ok) {
+    const message = `EVM RPC connectivity check failed: ${result.errorMessage ?? "unknown"}`;
     throw new InfraConnectivityError(message);
   }
 }
 
-/**
- * Doltgres knowledge-plane reach via the package factory. Only meaningful when
- * the node declares Doltgres (`DOLTGRES_URL`). A bounded point read; a healthy
- * empty hit returns null.
- */
-export function checkDoltgres(container: Container, env: Env): Promise<void> {
-  if (!env.DOLTGRES_URL) return Promise.resolve(); // undeclared; the registry filter also guards this
+function checkDoltgres(container: Container, env: Env): Promise<void> {
+  if (!env.DOLTGRES_URL) return Promise.resolve();
   const port = container.knowledgeStorePort;
   if (!port) {
     return Promise.reject(
       new InfraConnectivityError(
-        "Doltgres is declared (DOLTGRES_URL set) but the knowledge store is not wired"
-      )
+        "Doltgres is declared (DOLTGRES_URL set) but the knowledge store is not wired",
+      ),
     );
   }
   // bug.0042: a held work-item writer refuses every write while reads stay
@@ -126,8 +127,8 @@ export function checkDoltgres(container: Container, env: Env): Promise<void> {
   if (writer?.state === "held") {
     return Promise.reject(
       new InfraConnectivityError(
-        `Work-item writer held ${writer.heldMs}ms since ${writer.since}: ${writer.reason} at ${writer.stage} (operation ${writer.operationId}, native ${writer.nativeState}, settle attempts ${writer.settleAttempts})`
-      )
+        `Work-item writer held ${writer.heldMs}ms since ${writer.since}: ${writer.reason} at ${writer.stage} (operation ${writer.operationId}, native ${writer.nativeState}, settle attempts ${writer.settleAttempts})`,
+      ),
     );
   }
   return probeKnowledgePlane(port, DOLTGRES_READYZ_PROBE_ID, {
@@ -135,26 +136,23 @@ export function checkDoltgres(container: Container, env: Env): Promise<void> {
   })();
 }
 
-/** LiteLLM gateway reach via the package factory (uncached alias-catalog read). */
-export function checkLiteLlm(env: Env): Promise<void> {
+function checkLiteLlm(env: Env): Promise<void> {
   return probeLiteLlmGateway(
     {
       baseUrl: env.LITELLM_BASE_URL,
       apiKey: env.LITELLM_MASTER_KEY,
       budgetMs: DEEP_CHECK_BUDGET_MS,
     },
-    { wrapError: wrapInfra }
+    { wrapError: wrapInfra },
   )();
 }
 
-/** Redis run-stream reach via the package factory (`XLEN` on a fixed key). */
-export function checkRedis(container: Container): Promise<void> {
+function checkRedis(container: Container): Promise<void> {
   return probeRedisStream(container.runStream, REDIS_READYZ_PROBE_KEY, {
     wrapError: wrapInfra,
   })();
 }
 
-/** Every substrate dependency this node can declare, probe or justified non-probe. */
 type SubstrateName =
   | DeepDependency
   | "tigerbeetle"
@@ -165,10 +163,9 @@ type SubstrateName =
 type ProbeRun = (
   ctx: RequestContext,
   container: Container,
-  env: Env
+  env: Env,
 ) => Promise<unknown>;
 
-/** This node's declaration-map entry: the package type specialized to node names/closures. */
 type SubstrateDependency = PkgSubstrateDependency<
   Env,
   DeepDependency,
@@ -176,9 +173,8 @@ type SubstrateDependency = PkgSubstrateDependency<
   ProbeRun
 >;
 
-/** Narrow a registry entry to a probe entry (and thus `dependency: DeepDependency`). */
 function isProbe(
-  dep: SubstrateDependency
+  dep: SubstrateDependency,
 ): dep is PkgProbeDependency<Env, DeepDependency, ProbeRun> {
   return dep.readyz.kind === "probe";
 }
@@ -186,9 +182,8 @@ function isProbe(
 const always = (): boolean => true;
 
 /**
- * The single source of truth for what deep readiness proves. Probe entries are in
- * deep-registry order; new probes are appended so existing first-failure/order
- * assertions hold. `na` entries record why a declared dependency is not probed.
+ * The single source of truth for what the operator's deep readiness proves. Probe entries are in deep-registry
+ * order. `na` entries record why a declared dependency is not probed.
  */
 export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
   {
@@ -220,7 +215,7 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     },
   },
   {
-    // System tenant billing account (SYSTEM_TENANT_STARTUP_CHECK) is the Postgres verdict.
+    // The system tenant billing account (SYSTEM_TENANT_STARTUP_CHECK) is the Postgres verdict.
     dependency: "postgres",
     envKeys: ["DATABASE_URL", "DATABASE_SERVICE_URL"],
     isDeclared: always,
@@ -240,7 +235,10 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     dependency: "litellm-gateway",
     envKeys: ["LITELLM_BASE_URL"],
     isDeclared: always,
-    readyz: { kind: "probe", run: (_ctx, _container, env) => checkLiteLlm(env) },
+    readyz: {
+      kind: "probe",
+      run: (_ctx, _container, env) => checkLiteLlm(env),
+    },
   },
   {
     dependency: "doltgres",
@@ -284,18 +282,15 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     dependency: "openfga",
     envKeys: [],
     isDeclared: () => false,
-    readyz: { kind: "na", reason: "Not wired on toks5." },
+    readyz: { kind: "na", reason: "Not wired on node-template." },
   },
 ];
 
-/**
- * Build the deep-path checks for the dependencies this node declares, in registry
- * order. Probe entries use a `DeepDependency` name by construction.
- */
+/** Build the deep-path checks for the dependencies the operator declares, in registry order. */
 export function buildDeepChecks(
   ctx: RequestContext,
   container: Container,
-  env: Env
+  env: Env,
 ): ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]> {
   const checks: Array<readonly [DeepDependency, () => Promise<unknown>]> = [];
   for (const dep of SUBSTRATE_DEPENDENCIES) {
@@ -315,13 +310,9 @@ export const NON_SUBSTRATE_ALLOWLIST: readonly string[] = [
   "PROMETHEUS_QUERY_URL",
 ];
 
-/**
- * Drift guard: given the server-env schema keys, return every substrate-looking
- * key that is neither owned by a `SUBSTRATE_DEPENDENCIES` entry nor allowlisted.
- * Thin wrapper over the package helper with this node's classified keys.
- */
+/** Drift guard: every substrate-looking schema key owned by no map entry and not allowlisted. */
 export function findUnclassifiedSubstrateKeys(
-  schemaKeys: readonly string[]
+  schemaKeys: readonly string[],
 ): string[] {
   const classifiedKeys = SUBSTRATE_DEPENDENCIES.flatMap((dep) => [
     ...dep.envKeys,

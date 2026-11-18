@@ -83,6 +83,8 @@ export interface CompletionStreamParams {
   toolChoice?: import("@/ports").LlmToolChoice;
   /** Billing correlation metadata forwarded to LiteLLM as x-litellm-spend-logs-metadata header */
   spendLogsMetadata?: { run_id: string; graph_id: string; node_id?: string };
+  /** Output token cap; absent uses the provider adapter default. */
+  maxTokens?: number;
 }
 
 /**
@@ -100,6 +102,11 @@ export interface CompletionUnitParams {
   abortSignal?: AbortSignal;
   tools?: readonly import("@/ports").LlmToolDefinition[];
   toolChoice?: import("@/ports").LlmToolChoice;
+  /**
+   * Run-scoped: true when the run offers a tool that declares secret arguments. Becomes `LlmCaller.maskContent`, which
+   * makes the gateway's Langfuse logger write `redacted-by-litellm` for input and output (usage and cost still flow).
+   */
+  maskContent?: boolean;
 }
 
 /**
@@ -130,6 +137,14 @@ export type CompletionStreamFn = (
  * Per ROUTING_BY_NAMESPACE_ONLY: Graph routing is handled by NamespaceGraphRouter.
  * This adapter provides the completion unit execution that providers use internally.
  */
+/**
+ * Graph model calls carry agent reasoning plus tool calls; reasoning models exhausted the chat
+ * default (4096) before emitting a tool call. This is a cap, not a reservation: billing follows usage.
+ * Only hosted platform models get it; BYO endpoints may have smaller context windows that reject
+ * prompt + requested output, so they keep the provider adapter default.
+ */
+export const GRAPH_MAX_OUTPUT_TOKENS = 16_384;
+
 export class InProcCompletionUnitAdapter {
   private readonly log: Logger;
 
@@ -149,8 +164,15 @@ export class InProcCompletionUnitAdapter {
    * Runners orchestrate; this method handles transformation + billing events.
    */
   executeCompletionUnit(params: CompletionUnitParams): CompletionUnitResult {
-    const { messages, model, runContext, abortSignal, tools, toolChoice } =
-      params;
+    const {
+      messages,
+      model,
+      runContext,
+      abortSignal,
+      tools,
+      toolChoice,
+      maskContent,
+    } = params;
     const { runId, attempt, graphId } = runContext;
     const scope = getExecutionScope();
     const traceId =
@@ -186,6 +208,7 @@ export class InProcCompletionUnitAdapter {
           virtualKeyId: scope.billing.virtualKeyId,
           requestId: runId,
           traceId,
+          ...(maskContent && { maskContent: true }),
         };
 
         // Resolved LlmService from execution scope (set by provider registry at launch)
@@ -209,6 +232,9 @@ export class InProcCompletionUnitAdapter {
             node_id: this.deps.nodeId,
             graph_id: runContext.graphId,
           },
+          ...(scope.modelRef?.providerKey === "platform" && {
+            maxTokens: GRAPH_MAX_OUTPUT_TOKENS,
+          }),
         }).catch((error: unknown) => {
           // Classify at typed boundary: convert InsufficientCreditsPortError to typed result
           if (isInsufficientCreditsPortError(error)) {

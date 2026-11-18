@@ -39,11 +39,20 @@ export default defineConfig({
     // ship a job that can never go green. Forks that adopt the sandbox runtime
     // re-include this dir alongside the image build. (ripgrep tests DO run — their
     // adapter ships and CI installs the binary.)
-    exclude: ["tests/component/docker/**"],
+    // The Doltgres lane owns `doltgres-*.int.test.ts`: it starts its own
+    // dolthub/doltgresql container, so running it here too would boot a second
+    // engine and duplicate a 6s+ suite on the critical path.
+    exclude: [
+      "tests/component/docker/**",
+      "tests/component/db/doltgres-*.int.test.ts",
+    ],
     environment: "node",
     setupFiles: ["./tests/setup.ts"],
     globalSetup: ["./tests/component/setup/testcontainers-postgres.global.ts"],
     sequence: { concurrent: false },
+    // Component files share one Postgres and the agent tests delete and insert the same users/bindings/roles rows in different
+    // orders, so parallel files deadlock (node-template main hit the same `deadlock detected` in agent-roles-route). Run files one at a time.
+    fileParallelism: false,
   },
   resolve: {
     alias: {

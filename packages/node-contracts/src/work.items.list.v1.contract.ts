@@ -13,8 +13,9 @@
  * @internal
  */
 
-
 import {
+  WORK_ITEM_SORT_DIRECTIONS,
+  WORK_ITEM_SORT_FIELDS,
   WorkItemDtoSchema,
   WorkItemSummarySchema,
   WorkSummaryPageInfoSchema,
@@ -22,13 +23,11 @@ import {
 } from "@cogni/work-items";
 import { z } from "zod";
 
-export { WorkItemDtoSchema, WorkItemSummarySchema } from "@cogni/work-items";
-
-/** Outline only; the released work-items adapter owns score validation. */
-export const WorkItemScoresInputSchema = z.record(
-  z.string(),
-  z.looseObject({ v: z.number(), ev: z.string().optional() })
-);
+export {
+  WorkItemDtoSchema,
+  WorkItemScoresInputSchema,
+  WorkItemSummarySchema,
+} from "@cogni/work-items";
 
 export const workItemsListOperation = {
   id: "work.items.list.v1",
@@ -36,12 +35,23 @@ export const workItemsListOperation = {
   description:
     "Returns work items matching optional type, status, text, and project filters.",
   input: z.object({
+    sortBy: z.enum(WORK_ITEM_SORT_FIELDS).optional(),
+    sortDirection: z.enum(WORK_ITEM_SORT_DIRECTIONS).optional(),
     types: z.array(z.string()).optional(),
     statuses: z.array(z.string()).optional(),
     text: z.string().optional(),
     actor: z.enum(["human", "ai", "either"]).optional(),
     projectId: z.string().optional(),
+    projectIds: z.array(z.string()).optional(),
+    rankMin: z.number().finite().optional(),
+    rankMax: z.number().finite().optional(),
     node: z.union([z.string(), z.array(z.string())]).optional(),
+    /** Any-of label filter (bug.5552): items carrying at least one of these labels. */
+    labels: z.array(z.string()).optional(),
+    /** Items with at least one label whose text starts with this prefix (bug.5552). */
+    labelPrefix: z.string().optional(),
+    /** true = only items with a complete 6-axis score; false = only unscored (bug.5552). */
+    scored: z.boolean().optional(),
     limit: z.number().int().positive().max(500).optional(),
     cursor: z.string().optional(),
   }),
@@ -64,15 +74,15 @@ export type WorkItemsListInput = z.infer<typeof workItemsListOperation.input>;
 export type WorkItemsListOutput = z.infer<typeof workItemsListOperation.output>;
 
 /**
- * Bounded summary pages (task.0056, from node-template task.0055). The input is
- * the published `WorkSummaryQuerySchema` (default 25, max 100 rows, cursor ≤ 2048
- * chars, list filters ≤ 50 values, text ≤ 200 chars): the same schema the browser
- * encodes and the route decodes with, never the 500-row full-item list input.
+ * Bounded summary pages (task.0055). The input is the published
+ * `WorkSummaryQuerySchema` (default 25, max 100 rows, cursor ≤ 2048 chars, list
+ * filters ≤ 50 values, text ≤ 200 chars): the same schema the browser encodes
+ * and the route decodes with, never the 500-row full-item list input.
  */
 export const workItemSummariesListOperation = {
   id: "work.summaries.list.v1",
   input: WorkSummaryQuerySchema,
-  /** `pageInfo` is always present: every summaries read is one bounded keyset page. */
+  /** `pageInfo` is always present: every summaries read is one bounded keyset page (task.0055). */
   output: workItemsListOperation.output.extend({
     items: z.array(WorkItemSummarySchema),
     pageInfo: WorkSummaryPageInfoSchema,
@@ -82,6 +92,4 @@ export type WorkItemSummary = z.infer<typeof WorkItemSummarySchema>;
 export type WorkItemSummariesListInput = z.infer<
   typeof workItemSummariesListOperation.input
 >;
-export type WorkItemSummariesListOutput = z.infer<
-  typeof workItemSummariesListOperation.output
->;
+export type WorkItemSummariesListOutput = z.infer<typeof workItemSummariesListOperation.output>;

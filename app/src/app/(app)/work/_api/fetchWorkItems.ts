@@ -7,17 +7,14 @@
  * Scope: Calls summary, board and detail endpoints with type-safe contracts. Does not implement business logic.
  * Invariants:
  *   - Returns typed summary pages, board columns or details, or throws `WorkItemFetchError` carrying the HTTP status (the package hooks retry only 5xx and network failures)
- *   - BOUNDED_BOARD_READS: the only list reads are one `/work/summaries` page (table) and one `/work/board` request plus single column pages; nothing here walks cursors (task.0056)
+ *   - BOUNDED_BOARD_READS: the only list reads are one `/work/summaries` page (table) and one `/work/board` request plus single column pages; nothing here walks cursors (task.0055)
  * Side-effects: IO
  * Links: [work.items.list.v1.contract](../../../../contracts/work.items.list.v1.contract.ts)
  * @internal
  */
 
-import type {
-  WorkItemDto,
-  WorkItemSummariesListOutput,
-} from "@cogni/node-contracts";
-import type { WorkBoardColumns } from "@cogni/work-items";
+import type { WorkItemDto, WorkItemSummariesListOutput } from "@cogni/node-contracts";
+import type { WorkBoardColumns, WorkSummaryPage } from "@cogni/work-items";
 
 export class WorkItemFetchError extends Error {
   readonly status: number;
@@ -30,14 +27,14 @@ export class WorkItemFetchError extends Error {
 }
 
 export function isWorkItemNotFoundError(
-  error: unknown
+  error: unknown,
 ): error is WorkItemFetchError {
   return error instanceof WorkItemFetchError && error.status === 404;
 }
 
 async function responseErrorMessage(
   response: Response,
-  fallback: string
+  fallback: string,
 ): Promise<string> {
   const body: unknown = await response.json().catch(() => undefined);
   if (
@@ -51,10 +48,10 @@ async function responseErrorMessage(
   return fallback;
 }
 
-/** Fetch one bounded server-filtered summary page. */
+/** Fetch one bounded server-filtered page. */
 export async function fetchWorkItems(
   params: URLSearchParams,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<WorkItemSummariesListOutput> {
   const response = await fetch(`/api/v1/work/summaries?${params}`, {
     method: "GET",
@@ -65,7 +62,7 @@ export async function fetchWorkItems(
   if (!response.ok)
     throw new WorkItemFetchError(
       await responseErrorMessage(response, `HTTP ${response.status}`),
-      response.status
+      response.status,
     );
   return response.json() as Promise<WorkItemSummariesListOutput>;
 }
@@ -73,7 +70,7 @@ export async function fetchWorkItems(
 /** Fetch the first page of every visible board column in one request. */
 export async function fetchWorkBoard(
   params: URLSearchParams,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<WorkBoardColumns> {
   const response = await fetch(`/api/v1/work/board?${params}`, {
     method: "GET",
@@ -84,15 +81,12 @@ export async function fetchWorkBoard(
   if (!response.ok)
     throw new WorkItemFetchError(
       await responseErrorMessage(response, `HTTP ${response.status}`),
-      response.status
+      response.status,
     );
   return response.json() as Promise<WorkBoardColumns>;
 }
 
-export async function fetchWorkItem(
-  id: string,
-  signal?: AbortSignal
-): Promise<WorkItemDto> {
+export async function fetchWorkItem(id: string, signal?: AbortSignal): Promise<WorkItemDto> {
   const response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
     method: "GET",
     ...(signal && { signal }),
@@ -103,7 +97,7 @@ export async function fetchWorkItem(
   if (!response.ok) {
     const message = await responseErrorMessage(
       response,
-      `Failed to fetch work item (HTTP ${response.status})`
+      `Failed to fetch work item (HTTP ${response.status})`,
     );
     throw new WorkItemFetchError(message, response.status);
   }

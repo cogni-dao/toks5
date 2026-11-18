@@ -4,6 +4,7 @@
 
 ## Metadata
 
+- **Last reviewed:** 2026-11-05
 - **Owners:** @Cogni-DAO
 - **Status:** draft
 
@@ -38,8 +39,14 @@ Shared Zod route contracts and HTTP router definitions for all node apps. PURE_L
 
 All contract files re-exported via `src/index.ts`. Selective re-export for `ai.chat.v1.contract` to avoid `ChatMessage` name collision with `ai.completions.v1.contract`.
 
-- `knowledge.domains.v1.contract` — domain item GET/PATCH/DELETE operations, strict metadata patch and typed domain/perimeter errors
+- `knowledge.browse.v1.contract` — reexports canonical knowledge-store Browse/Overview queries, summary rows and bounded live pages with observed revision markers.
+- `work.items.list.v1.contract` — full and summary list contracts share filters; optional sortBy/sortDirection use work-items canonical allowlists; rankMin/rankMax are inclusive; projectIds is any-of; DTO exposes derived read-only rankScore
+- `work.items.{list,create,patch}.v1.contract` — evaluation scores outline (`scores.<axis>.v/ev`); shared work-items adapter validates bounds, PATCH null clears scores
+- `history.v1.contract` — re-exports the history schemas and operations owned by `@cogni-dao/work-items` and `@cogni-dao/knowledge-store/contracts` (story.0023); declares none of its own
+- `work.items.artifacts.v1.contract` — re-exports the artifact write body, stored row, latest-of-each-kind part and the create and list operations owned by `@cogni-dao/work-items` (task.0028); declares none of its own
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
+
+**Schedule contracts:** create/update/list/history files reexport the published scheduling package. Owned detail and paginated metadata retain nullable thread correlation and existing wire shapes.
 
 **Attribution lifecycle contracts:**
 
@@ -63,12 +70,11 @@ All require `Authorization: Bearer ${SCHEDULER_API_TOKEN}`.
 
 ## Dependencies
 
-- **Internal:** `@cogni/ai-core`, `@cogni/aragon-osx`, `@cogni/node-core`
+- **Internal:** `@cogni/ai-core`, `@cogni/aragon-osx`, `@cogni/node-core`, `@cogni/scheduling` (published readback/contracts alias), `@cogni/work-items` (sort allowlists).
 - **External:** `zod`, `@ts-rest/core`
-
-- WorkItemDtoSchema and KnowledgeRowSchema are re-exported from their published domain owners; HTTP envelopes derive without parallel field lists.
 
 ## Notes
 
 - Extracted from `apps/operator/src/contracts/` (task.0248 Phase 1)
 - `ChatMessage` exported from `ai.completions.v1.contract` (OpenAI-compatible format); chat contract's `ChatMessage` excluded from barrel to avoid TS2308
+- `work.items.get.v1` (0.4.0, task.0118): the single-item read is additive. `WORK_ITEM_INCLUDES` (`["links"]`) is the allowed `?include=` list; `output` is the one `WorkItemDtoSchema`, so each `moves` entry may carry `metric`, `kpi`, `goal` or `context: "unavailable"`, and `links` appears only with `include=links`.

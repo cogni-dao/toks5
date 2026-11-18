@@ -3,19 +3,25 @@
 
 /**
  * Module: `@tests/contract/app/knowledge.read-principal`
- * Purpose: Lock in KNOWLEDGE_READ_REQUIRES_PRINCIPAL — bearer-token agents may
- *   read the knowledge plane (list, single entry, citation graph, domain
- *   registry) just like cookie-session humans. Regression guard for the v0
- *   guard that 403'd every bearer browse request.
- * Scope: Exercises the four GET read routes with an `Authorization: Bearer`
- *   header against a seeded fake store. Does not test write/contribution paths.
- * Invariants: a bearer-bearing read returns 200 (never 403); link-pulling
- *   (graph edges) is reachable by agents.
+ * Purpose: Lock in KNOWLEDGE_READ_NEEDS_GRANT — a bearer-token agent reads the
+ *   knowledge plane (list, single entry, citation graph, domain registry) only
+ *   with a live `knowledge:read` role row (task.0110); a signed-in human reads
+ *   with no row. Without the row a bearer gets 403 `policy_denied`.
+ * Scope: Exercises the GET read routes and mutation failure receipts with an `Authorization: Bearer`
+ *   header against a seeded fake store or a failing contribution service. The REAL `authorizeRoute` runs on a fake SQL tag.
+ * Invariants: a bearer with the role reads 200; a bearer without it is 403 before any read; link-pulling
+ *   (graph edges) is reachable by an agent that holds the role.
  * Side-effects: none (container + auth mocked, fake in-memory store)
  * Links: src/app/api/v1/knowledge, https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @internal
  */
 
+import {
+  KnowledgeBusyError,
+  KnowledgeWriteConflictError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+} from "@cogni/knowledge-store";
 import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
@@ -24,6 +30,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Fresh fake store per test (reassigned in beforeEach); the container mock
 // hands the current instance to every route. Lazy factory => reads latest value.
 let mockStore: FakeKnowledgeStoreAdapter;
+// The real route door over a fake SQL tag: answers the role lookup from `roles` ("<principal>|<scope>").
+const grants = vi.hoisted(() => ({ roles: new Set<string>(), authority: undefined as unknown }));
+const mockContributions = vi.hoisted(() => ({
+  create: vi.fn(),
+  appendCommit: vi.fn(),
+  merge: vi.fn(),
+  close: vi.fn(),
+  createEdoHypothesisContribution: vi.fn(),
+}));
 
 vi.mock("@/bootstrap/container", () => ({
   getContainer: vi.fn(() => ({
@@ -42,6 +57,8 @@ vi.mock("@/bootstrap/container", () => ({
     clock: { now: vi.fn(() => new Date("2026-01-01T00:00:00Z")) },
     config: { unhandledErrorPolicy: "rethrow" },
     knowledgeStorePort: mockStore,
+    agentAuthority: grants.authority,
+    knowledgeContributionService: mockContributions,
   })),
 }));
 
@@ -53,10 +70,24 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
 }));
 
+import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import {
+  type AgentAuthoritySql,
+  createAgentToolAuthority,
+} from "@/bootstrap/agent-authority";
+import { getSessionUser } from "@/app/_lib/auth/session";
+import * as browseHandler from "@/app/api/v1/knowledge/browse/route";
+import * as historyHandler from "@/app/api/v1/knowledge/[id]/history/route";
+import * as indexHandler from "@/app/api/v1/knowledge/index/route";
+import * as domainHandler from "@/app/api/v1/knowledge/domains/[domain]/route";
 import * as entryHandler from "@/app/api/v1/knowledge/[id]/route";
 import * as domainsHandler from "@/app/api/v1/knowledge/domains/route";
 import * as graphHandler from "@/app/api/v1/knowledge/graph/route";
 import * as listHandler from "@/app/api/v1/knowledge/route";
+
+import * as contributionMutations from "@/app/api/v1/knowledge/contributions/_handlers";
+import * as domainMutations from "@/app/api/v1/knowledge/domains/_handlers";
+import * as edoMutations from "@/app/api/v1/edo/_handlers";
 
 const BEARER = { authorization: "Bearer cogni_ag_sk_v1_test.signature" };
 
@@ -89,9 +120,31 @@ async function seedStore(store: FakeKnowledgeStoreAdapter) {
   );
 }
 
-describe("knowledge read routes — KNOWLEDGE_READ_REQUIRES_PRINCIPAL", () => {
+function fakeSql(): AgentAuthoritySql {
+  const tag = (async (strings: TemplateStringsArray, ...values: unknown[]) =>
+    strings.join("?").includes("FROM agent_roles") &&
+    grants.roles.has(`${values[0]}|${values[1]}`)
+      ? [{ ok: 1 }]
+      : []) as unknown as AgentAuthoritySql;
+  (tag as unknown as { begin: unknown }).begin = async (
+    fn: (t: unknown) => Promise<unknown>
+  ) => fn(tag);
+  return tag;
+}
+
+describe("knowledge read routes — KNOWLEDGE_READ_NEEDS_GRANT", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    // clearAllMocks keeps the default session user (no `via`: the strict bearer branch).
+    grants.roles = new Set([`${TEST_SESSION_USER_1.id}|knowledge:read`]);
+    const noop = () => undefined;
+    const quiet = { info: noop, warn: noop, error: noop, debug: noop };
+    grants.authority = createAgentToolAuthority({
+      sql: fakeSql(),
+      nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_denied" }) },
+      log: quiet as never,
+      toolBundle: CORE_TOOL_BUNDLE as never,
+    });
     mockStore = new FakeKnowledgeStoreAdapter();
     await seedStore(mockStore);
   });
@@ -190,5 +243,242 @@ describe("knowledge read routes — KNOWLEDGE_READ_REQUIRES_PRINCIPAL", () => {
         expect(body.domains.map((d: { id: string }) => d.id)).toContain("eng");
       },
     });
+  });
+});
+
+describe("knowledge read door — bearer without the role is 403, a human is 200", () => {
+  const reads = [
+    { name: "list", appHandler: listHandler, url: "/api/v1/knowledge" },
+    { name: "get", appHandler: entryHandler, url: "/api/v1/knowledge/entry-a", params: { id: "entry-a" } },
+    { name: "history", appHandler: historyHandler, url: "/api/v1/knowledge/entry-a/history", params: { id: "entry-a" } },
+    { name: "browse", appHandler: browseHandler, url: "/api/v1/knowledge/browse" },
+    { name: "index", appHandler: indexHandler, url: "/api/v1/knowledge/index" },
+    { name: "graph", appHandler: graphHandler, url: "/api/v1/knowledge/graph" },
+    { name: "domains", appHandler: domainsHandler, url: "/api/v1/knowledge/domains" },
+    { name: "domain", appHandler: domainHandler, url: "/api/v1/knowledge/domains/eng", params: { domain: "eng" } },
+  ];
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockStore = new FakeKnowledgeStoreAdapter();
+    await seedStore(mockStore);
+    grants.roles = new Set();
+    grants.authority = createAgentToolAuthority({
+      sql: fakeSql(),
+      nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_denied" }) },
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      toolBundle: CORE_TOOL_BUNDLE as never,
+    });
+  });
+  for (const r of reads) {
+    it(`GET ${r.name}: a bearer with no knowledge:read row is 403 policy_denied`, async () => {
+      await testApiHandler({
+        appHandler: r.appHandler,
+        ...(r.params ? { params: r.params } : {}),
+        url: r.url,
+        async test({ fetch }) {
+          const res = await fetch({ method: "GET", headers: BEARER });
+          expect(res.status).toBe(403);
+          expect(await res.json()).toEqual({ error: "policy_denied", code: "policy_denied" });
+        },
+      });
+    });
+  }
+  it("a bearer holding another scope is still 403; once knowledge:read is turned on it is 200", async () => {
+    grants.roles.add(`${TEST_SESSION_USER_1.id}|knowledge:contribute`);
+    await testApiHandler({
+      appHandler: listHandler,
+      url: "/api/v1/knowledge",
+      async test({ fetch }) {
+        expect((await fetch({ method: "GET", headers: BEARER })).status).toBe(403);
+        grants.roles.add(`${TEST_SESSION_USER_1.id}|knowledge:read`);
+        expect((await fetch({ method: "GET", headers: BEARER })).status).toBe(200);
+      },
+    });
+  });
+  it("a signed-in human session reads with no role row", async () => {
+    vi.mocked(getSessionUser).mockResolvedValueOnce({ ...TEST_SESSION_USER_1, via: "session" });
+    await testApiHandler({
+      appHandler: listHandler,
+      url: "/api/v1/knowledge",
+      async test({ fetch }) {
+        const res = await fetch({ method: "GET" });
+        expect(res.status).toBe(200);
+        expect((await res.json()).items).toHaveLength(2);
+      },
+    });
+  });
+});
+
+/** Actual handlers must preserve the typed service failure across the HTTP boundary. */
+describe("knowledge mutation failure receipts", () => {
+  beforeEach(() => {
+    mockStore = new FakeKnowledgeStoreAdapter();
+    Object.values(mockContributions).forEach((method) => method.mockReset());
+  });
+  function request(body: unknown) {
+    return new Request("https://node.test/api/v1/knowledge/contributions", {
+      method: "POST",
+      headers: { ...BEARER, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+  const operations = [
+    {
+      name: "create",
+      method: () => mockContributions.create,
+      invoke: () =>
+        contributionMutations.handleCreate(
+          request({ message: "Create" }),
+          TEST_SESSION_USER_1
+        ),
+    },
+    {
+      name: "append",
+      method: () => mockContributions.appendCommit,
+      invoke: () =>
+        contributionMutations.handleAppendCommit(
+          request({
+            message: "Append",
+            edits: [
+              {
+                op: "patch",
+                targetRowId: "entry-a",
+                entry: { useWhen: "Inspect after timeout" },
+              },
+            ],
+          }),
+          "contrib-a",
+          TEST_SESSION_USER_1
+        ),
+    },
+    {
+      name: "merge",
+      method: () => mockContributions.merge,
+      invoke: () =>
+        contributionMutations.handleMerge(
+          request({}),
+          "contrib-a",
+          TEST_SESSION_USER_1
+        ),
+    },
+    {
+      name: "close",
+      method: () => mockContributions.close,
+      invoke: () =>
+        contributionMutations.handleClose(
+          request({ reason: "Close" }),
+          "contrib-a",
+          TEST_SESSION_USER_1
+        ),
+    },
+    {
+      name: "domain create",
+      method: () => vi.spyOn(mockStore, "registerDomain"),
+      invoke: () =>
+        domainMutations.handleCreate(
+          request({ id: "eng", name: "Engineering" }),
+          TEST_SESSION_USER_1
+        ),
+    },
+    {
+      name: "EDO create",
+      method: () => mockContributions.createEdoHypothesisContribution,
+      invoke: () =>
+        edoMutations.handleHypothesize(
+          request({
+            id: "hypothesis-a",
+            domain: "eng",
+            title: "A falsifiable claim",
+            content: "Evidence and prediction",
+            evaluateAt: "2026-12-01T00:00:00.000Z",
+          }),
+          TEST_SESSION_USER_1
+        ),
+    },
+  ];
+  const failures = [
+    {
+      name: "unknown outcome",
+      error: () =>
+        new KnowledgeWriteOutcomeUnknownError(
+          "operation-a",
+          "cogni/operation-a",
+          "a".repeat(32)
+        ),
+      status: 409,
+      expected: {
+        errorCode: "knowledge_write_outcome_unknown",
+        retryable: false,
+        operationId: "operation-a",
+        branch: "cogni/operation-a",
+        commitHash: "a".repeat(32),
+      },
+    },
+    {
+      name: "closed scope",
+      error: () => new KnowledgeWriteScopeRequiredError(),
+      status: 500,
+      expected: {
+        errorCode: "knowledge_write_scope_required",
+        retryable: false,
+      },
+    },
+    {
+      name: "conflicting write",
+      error: () => new KnowledgeWriteConflictError("entry-a"),
+      status: 409,
+      expected: {
+        errorCode: "knowledge_write_conflict",
+        retryable: false,
+        entryId: "entry-a",
+      },
+    },
+    {
+      name: "pre-admission busy",
+      error: () => new KnowledgeBusyError(),
+      status: 503,
+      expected: { retryable: true },
+    },
+  ];
+  for (const operation of operations) {
+    for (const failure of failures) {
+      it(`${operation.name} preserves ${failure.name} without replay`, async () => {
+        const method = operation.method();
+        const error = failure.error();
+        method.mockRejectedValueOnce(error);
+        const response = await operation.invoke();
+        expect(response.status).toBe(failure.status);
+        expect(await response.json()).toEqual({
+          error: error.message,
+          ...failure.expected,
+        });
+        expect(response.headers.get("Retry-After")).toBe(
+          failure.status === 503 ? "2" : null
+        );
+        expect(method).toHaveBeenCalledTimes(1);
+      });
+    }
+  }
+  for (const operation of operations.slice(0, 4)) {
+    it(`${operation.name} preserves an unknown outcome with no acknowledged hash`, async () => {
+      const method = operation.method();
+      method.mockRejectedValueOnce(
+        new KnowledgeWriteOutcomeUnknownError("before-ack", "contrib/retained")
+      );
+      const response = await operation.invoke();
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        retryable: false,
+        operationId: "before-ack",
+        branch: "contrib/retained",
+        commitHash: null,
+      });
+      expect(method).toHaveBeenCalledTimes(1);
+    });
+  }
+  it("keeps unrelated failures for the normal server-error policy", async () => {
+    const failure = new Error("unexpected implementation failure");
+    mockContributions.create.mockRejectedValueOnce(failure);
+    await expect(operations[0]!.invoke()).rejects.toBe(failure);
   });
 });

@@ -232,6 +232,90 @@
       "when": 1794259113262,
       "tag": "0032_tan_dragon_lord",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794968500000,
+      "tag": "0033_drop_reverted_agent_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794968501000,
+      "tag": "0034_graph_claim_lease",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1794968502000,
+      "tag": "0035_work_item_leases",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1794968503000,
+      "tag": "0036_agent_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1794968504000,
+      "tag": "0037_seed_agent_principals",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1794968505000,
+      "tag": "0038_agent_access_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1794968506000,
+      "tag": "0039_agent_credentials",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1794968507000,
+      "tag": "0040_agent_credentials_key_upgrade",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794968508000,
+      "tag": "0041_agent_account_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1794968509000,
+      "tag": "0042_agent_account_grants_durable",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794968510000,
+      "tag": "0043_agent_wallet_is_not_a_payee",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794968511000,
+      "tag": "0044_backfill_agent_principals",
+      "breakpoints": true
     }
   ]
 }

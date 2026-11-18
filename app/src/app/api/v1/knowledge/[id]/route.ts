@@ -1,3 +1,4 @@
+import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -5,17 +6,15 @@
  * Module: `@app/api/v1/knowledge/[id]/route`
  * Purpose: GET /api/v1/knowledge/[id] — fetch a single knowledge entry for the routable
  *   full-page view (the permalink target humans click and AI emits).
- * Scope: Any authenticated principal (cookie-session human OR bearer agent), mirroring the list route.
+ * Scope: Signed-in human, or a bearer agent holding the knowledge:read role (sameDoor `knowledge.read`), mirroring the list route.
  *   Reads via container.knowledgeStorePort.getKnowledge.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_NEEDS_GRANT.
  * Side-effects: IO (HTTP response, Doltgres read via container port)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @public
  */
 
-import { toKnowledgeRow } from "@cogni/knowledge-store";
-import { KnowledgeRowSchema } from "@cogni/node-contracts";
-import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
+import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes.server";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -29,14 +28,15 @@ export const GET = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "knowledge.get",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, _request, sessionUser, context) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
-    // Any authenticated principal may read (KNOWLEDGE_READ_REQUIRES_PRINCIPAL).
-    // Bearer agents recall merged entries just like the human browse UI;
+    // A signed-in human reads. A bearer agent needs the knowledge:read role (sameDoor knowledge.read; KNOWLEDGE_READ_NEEDS_GRANT).
+    // Merged entries are not open to any registered key;
     // per-principal x402 metering for external readers remains future work.
 
     const port = getContainer().knowledgeStorePort;
@@ -57,19 +57,8 @@ export const GET = wrapRouteHandlerWithLogging<{
 
     ctx.log.info({ id }, "knowledge.get_success");
 
-    const goalMetrics = getContainer().goalMetrics;
-    const kpis =
-      ["goal", "hypothesis"].includes(entry.entryType ?? "") &&
-      entry.kpiBindings?.length &&
-      goalMetrics
-        ? await goalMetrics.bindings(
-            KpiBindingsSchema.parse(entry.kpiBindings),
-            { hypothesis: entry.entryType === "hypothesis" }
-          )
-        : undefined;
-    return NextResponse.json({
-      ...KnowledgeRowSchema.parse(toKnowledgeRow(entry)),
-      ...(kpis ? { kpis } : {}),
-    });
+    return NextResponse.json(
+      { ...toHttpKnowledgeRow(entry), ...(["goal", "hypothesis"].includes(entry.entryType ?? "") && entry.kpiBindings?.length && getContainer().goalMetrics ? { kpis: await getContainer().goalMetrics!.bindings(KpiBindingsSchema.parse(entry.kpiBindings), { hypothesis: entry.entryType === "hypothesis" }) } : {}) }
+    );
   }
 );

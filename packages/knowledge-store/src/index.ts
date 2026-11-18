@@ -1,0 +1,339 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/knowledge-store`
+ * Purpose: Knowledge data plane capability — port, domain types, contribution service, and Zod schemas.
+ * Scope: Root barrel exports port interfaces, domain types, and the framework-agnostic contribution service factory. Does not export adapters — those live behind subpath imports.
+ * Invariants: PACKAGES_NO_ENV, PACKAGES_NO_LIFECYCLE, PACKAGES_NO_SRC_IMPORTS.
+ * Side-effects: none
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-contribution-flow
+ * @public
+ */
+
+// Capability factories (shared across all nodes)
+export {
+  type CapabilityActiveGoal,
+  createKnowledgeCapability,
+} from "./capability.js";
+// Domain types & schemas
+export {
+  assertWritableConfidence,
+  BASELINE_CONFIDENCE_BY_SOURCE,
+  CONFIDENCE_EXEMPT_ENTRY_TYPES,
+  CONFIDENCE_POLICY_VERSION,
+  type ConfidenceCitationBasis,
+  type ConfidenceDecision,
+  ConfidencePolicyError,
+  clampConfidence,
+  explainConfidence,
+  initializeConfidence,
+  isConfidenceExempt,
+  recomputeConfidence,
+} from "./domain/confidence-policy.js";
+// Contribution domain
+export {
+  type ContributionCitationDiffEntry,
+  ContributionCitationDiffEntrySchema,
+  type ContributionCitationType,
+  ContributionCitationTypeSchema,
+  type ContributionCommitRecord,
+  ContributionCommitRecordSchema,
+  type ContributionDiffEntry,
+  ContributionDiffEntrySchema,
+  type ContributionRecord,
+  ContributionRecordSchema,
+  type ContributionState,
+  ContributionStateSchema,
+  KNOWLEDGE_ENTRY_PATCH_FIELDS,
+  type KnowledgeContributionEdit,
+  KnowledgeContributionEditSchema,
+  KnowledgeEntryIdSchema,
+  type KnowledgeEntryInput,
+  KnowledgeEntryInputSchema,
+  type KnowledgeEntryPatch,
+  KnowledgeEntryPatchSchema,
+  knowledgeEntryPatchIsEmpty,
+  type Principal,
+  type PrincipalKind,
+  PrincipalKindSchema,
+  PrincipalSchema,
+} from "./domain/contribution-schemas.js";
+// DAO goal list (ONE_GOAL_LIST · NO_GOAL_CAP) — read via KnowledgeStorePort.listActiveGoals
+export {
+  type ActiveGoal,
+  GOAL_ENTRY_TYPE,
+  GOAL_ID_PREFIX,
+  GOAL_RETIRING_EDGE,
+  GOALS_BOOTSTRAP_INSTRUCTION,
+  type GoalCandidateRow,
+  type GoalsLookupPort,
+  type GoalsSection,
+  isActiveGoalRow,
+  isGoalRowId,
+  renderGoalsLines,
+  resolveGoals,
+  selectActiveGoals,
+} from "./domain/dao-goals.js";
+// Node-admin seam (GOAL_CHANGE_IS_NODE_ADMIN · P0P1_IS_NODE_ADMIN) — one injected authority per node
+export {
+  checkNodeAdmin,
+  isPrivilegedPriority,
+  type NodeAdminActor,
+  type NodeAdminAuthority,
+  type NodeAdminDecision,
+  NodeAdminRequiredError,
+  type TouchedCitation,
+  touchesGoalLayer,
+} from "./domain/node-admin.js";
+// Write-pipeline gates (proj.knowledge-syntropy — W0 Gates tier)
+export {
+  type GateContext,
+  type GateError,
+  type GateResult,
+  type KnowledgeGate,
+  KnowledgeGateError,
+  type KnowledgeWriteCandidate,
+  provenanceGate,
+  runGateChain,
+  shapeGate,
+  V0_DETERMINISTIC_GATES,
+} from "./domain/gates/index.js";
+// Goal codec (tags ⇄ Goal) + KPI reader registry (goal-loop controller seam)
+export {
+  type DecodedGoalTags,
+  decodeGoalTags,
+  encodeGoalTags,
+  GOAL_CONFIG_TAG_KEYS,
+  GOAL_TAG_KEYS,
+  type GoalConfigInput,
+  type GoalFromRow,
+  goalFromRow,
+  isGoalTag,
+  stepGraphIdFromTags,
+  successCriterionFromTags,
+} from "./domain/goal-codec.js";
+// Goal + KPI loop seam (proj.knowledge-syntropy — goal-loop controller seam)
+export {
+  applyStep,
+  DEFAULT_LOOP_BUDGET,
+  type Goal,
+  type GoalLoopDecision,
+  type GoalLoopHaltDecision,
+  type GoalLoopStepDecision,
+  GoalSchema,
+  goalLoopDecision,
+  haltEdge,
+  kpiIdFromStrategy,
+  type LoopBudget,
+  LoopBudgetSchema,
+  type LoopHaltReason,
+  LoopHaltReasonSchema,
+  type LoopState,
+  LoopStateSchema,
+  loopHaltReason,
+  METRIC_STRATEGY_PREFIX,
+  type MetricResolutionStrategy,
+  MetricResolutionStrategySchema,
+} from "./domain/goal-loop.js";
+// Knowledge-graph view model (shared assembly, no N+1)
+export {
+  buildKnowledgeGraph,
+  type KnowledgeGraphCitation,
+  type KnowledgeGraphEdge,
+  type KnowledgeGraphModel,
+  type KnowledgeGraphNode,
+  type KnowledgeGraphSnapshot,
+} from "./domain/knowledge-graph.js";
+// Whole-graph route handler (task.0059): ETag/304, one pinned read per revision, budget log
+export {
+  KNOWLEDGE_GRAPH_CACHE_CONTROL,
+  type KnowledgeGraphReadLog,
+  type KnowledgeGraphReadOptions,
+  type KnowledgeGraphReadPort,
+  type KnowledgeGraphReadResult,
+  knowledgeGraphBudgetBytes,
+  readKnowledgeGraph,
+} from "./domain/graph-read.js";
+// Session cognition (bug.0018): hub inputs per store revision within time budgets, plus the bundle's ETag/304 and Server-Timing rules
+export {
+  COGNITION_CACHE_CONTROL,
+  COGNITION_COLD_DEADLINE_MS,
+  COGNITION_FRESH_READ_DEADLINE_MS,
+  COGNITION_HEAD_ABANDON_MS,
+  COGNITION_MAX_STALE_MS,
+  COGNITION_MAX_UNSETTLED,
+  COGNITION_REVISION_DEADLINE_MS,
+  type CognitionReadOptions,
+  type CognitionReadPort,
+  type CognitionReadResult,
+  type CognitionSnapshot,
+  type CognitionStaleReason,
+  CognitionUnavailableError,
+  cognitionEtag,
+  cognitionEtagMatches,
+  cognitionServerTiming,
+  readCognitionSnapshot,
+} from "./domain/cognition-read.js";
+export {
+  createConfidenceSmokeReader,
+  createExternalCountReader,
+  createJudgeReader,
+  createKpiReaderRegistry,
+  deterministicJudgeScore,
+  type ExternalCountReaderConfig,
+  type ExternalCountSource,
+  JUDGE_KPI_ID,
+  type JudgeEvidenceAtom,
+  type JudgeEvidenceSource,
+  type JudgeInput,
+  type JudgeReaderConfig,
+  type JudgeScoreFn,
+  type OwnConfidenceSource,
+} from "./domain/kpi-reader.js";
+// Resolver dispatch (pure namespace router: metric: → goal-loop, agent → agent)
+export {
+  AGENT_STRATEGY,
+  classifyResolutionStrategy,
+  type ResolverTarget,
+} from "./domain/resolver-dispatch.js";
+// Domain types & schemas
+export {
+  type Citation,
+  CitationSchema,
+  CITATION_TYPE_DEFINITIONS,
+  type CitationTone,
+  type CitationType,
+  type CitationTypeDefinition,
+  CitationTypeSchema,
+  describeCitation,
+  citedEntryTypesFor,
+  type DoltCommit,
+  DoltCommitSchema,
+  type DoltDiffEntry,
+  DoltDiffEntrySchema,
+  type EntryType,
+  EntryTypeSchema,
+  EVALUATE_AT_REQUIRED_ENTRY_TYPES,
+  HYPOTHESIS_TARGETED_EDGES,
+  isWorkItemEndpointId,
+  type Knowledge,
+  KnowledgeSchema,
+  type NewCitation,
+  NewCitationSchema,
+  type NewKnowledge,
+  NewKnowledgeSchema,
+  RAW_WRITE_REJECTS_TYPES,
+  type ResolutionStrategy,
+  ResolutionStrategySchema,
+  requiresEvaluateAt,
+  type SourceType,
+  SourceTypeSchema,
+} from "./domain/schemas.js";
+export { KnowledgeWriteConflictError } from "./domain/write-replay.js";
+export {
+  KnowledgeBrowseCursorError,
+  KnowledgeBrowseQueryError,
+} from "./domain/browse-errors.js";
+export type { KnowledgeHistoryEntry } from "./domain/history.js";
+export { shapeKnowledgeHistory } from "./domain/history.js";
+export type {
+  KnowledgeHistoryPort,
+  KnowledgeHistoryReadLog,
+  KnowledgeHistoryResult,
+} from "./domain/history-read.js";
+export { readKnowledgeHistory } from "./domain/history-read.js";
+export { createEdoCapability } from "./edo-capability.js";
+// Entry resolver (task.0086): the shape of the work-items `EntryResolver` port; implemented by the Doltgres adapter entry
+export type {
+  EntryCiteRef,
+  EntryResolver,
+  EntryResolverRule,
+  ResolvedEntry,
+} from "./port/entry-resolver.port.js";
+export { EntryUnresolvedError } from "./port/entry-resolver.port.js";
+export {
+  ContributionConflictError,
+  ContributionForbiddenError,
+  ContributionNotFoundError,
+  ContributionQuotaError,
+  ContributionStateError,
+  type ContributionTouchedIds,
+  type CreateEdoDecisionInput,
+  type CreateEdoHypothesisInput,
+  type CreateEdoOutcomeInput,
+  EmptyKnowledgePatchError,
+  type KnowledgeContributionPort,
+} from "./port/contribution.port.js";
+// EDO resolver port (hypothesis loop)
+export type {
+  ChainDirection,
+  ChainNode,
+  EdoResolverPort,
+  PendingResolutionsOptions,
+  ResolutionEdge,
+  ResolutionInput,
+  ResolutionResult,
+  WalkChainOptions,
+} from "./port/edo-resolver.port.js";
+// Port interfaces + domain-registry types/errors
+export {
+  type CitationLinkPage,
+  type CitationLinkSummary,
+  CitationTargetNotFoundError,
+  CitationTypeMismatchError,
+  type Domain,
+  DomainAlreadyRegisteredError,
+  DomainNotEmptyError,
+  DomainNotRegisteredError,
+  type DomainPatch,
+  EdoEntryTypeRequiresAtomicToolError,
+  HypothesisMissingEvaluateAtError,
+  GoalRequiresContributionError,
+  KnowledgeBusyError,
+  type KnowledgeStorePort,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+  type KnowledgeWriteSession,
+  type NewDomain,
+} from "./port/knowledge-store.port.js";
+// KPI reader port (goal-loop — verifier-independent metric read)
+export {
+  type KpiReader,
+  type KpiReaderRegistry,
+  NonIndependentKpiReaderError,
+} from "./port/kpi-reader.port.js";
+// Contribution service (framework-agnostic, cross-node shared)
+export {
+  type AppendCommitBody,
+  type ContributionService,
+  type ContributionServiceDeps,
+  type CreateBody,
+  type CreateEdoDecisionBody,
+  type CreateEdoHypothesisBody,
+  type CreateEdoOutcomeBody,
+  createContributionService,
+  defaultCanMergeKnowledge,
+  type ListQuery,
+} from "./service/contribution-service.js";
+// Auth helpers
+export {
+  type PrincipalAuthSource,
+  type SessionUserLike,
+  sessionUserToPrincipal,
+} from "./util/session-to-principal.js";
+
+// Canonical governing discovery shared by all adapters.
+export {
+  GOVERNING_ENTRY_TYPES,
+  type GoverningEntryType,
+  type GoverningIndexRow,
+  type GoverningCandidateRow,
+  type GoverningCandidateEdge,
+  isGoverningEntryType,
+  selectGoverningIndex,
+} from "./domain/governing.js";
+
+export { toKnowledgeRow } from "./domain/schemas.js";
+
+export * from "./contracts.js";

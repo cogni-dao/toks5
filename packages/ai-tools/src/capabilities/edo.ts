@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Pure EDO contracts belong to the domain package; Toks5 bindings stay local. */
-export type {
-  ChainDirection,
-  ChainNodeEntry,
-  DecideParams,
-  EdoCapability,
-  EdoSourceType,
-  GetChainParams,
-  GetChainResult,
-  HypothesizeParams,
-  RecordOutcomeParams,
-  RecordOutcomeResult,
-} from "@cogni/knowledge-store/contracts";
+/**
+ * Module: `@cogni/ai-tools/capabilities/edo`
+ * Purpose: Preserve the public capability API from its domain owner.
+ * Scope: Compatibility re-exports only; no I/O or implementations.
+ * Invariants: Knowledge-store owns these contracts.
+ * Side-effects: none
+ * @public
+ */
+export type { EdoSourceType, HypothesizeParams, DecideParams, RecordOutcomeParams, RecordOutcomeResult, ChainDirection, GetChainParams, ChainNodeEntry, GetChainResult, EdoCapability } from "@cogni-dao/knowledge-store/contracts";

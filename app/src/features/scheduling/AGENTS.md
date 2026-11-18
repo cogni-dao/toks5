@@ -1,45 +1,28 @@
-# features/scheduling · AGENTS.md
+# scheduling · AGENTS.md
 
-> Scope: this directory only. Keep ≤150 lines. Do not restate root policies.
+> Scope: this directory only.
 
 ## Metadata
 
-- **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-10-25
+- **Owners:** @cogni-dao
 - **Status:** stable
 
 ## Purpose
 
-Bind authenticated Toks5 identities and node-owned schedule lookup to the published scheduling metadata reader.
-
-## Pointers
-
-- [Ports](../../ports/AGENTS.md)
-- [Container](../../bootstrap/AGENTS.md)
-- [Delivery work item](https://cognidao.org/work/items/task.5356)
+Node identity binding for the published scheduling package's owned configuration, run history and existing thread correlation.
 
 ## Boundaries
 
-```json
-{
-  "layer": "features",
-  "may_import": ["ports", "shared", "types"],
-  "must_not_import": ["app", "adapters"]
-}
-```
+Features inject local branded-ID schedule lookup into shared readback. No bootstrap, adapter, or app imports.
 
 ## Public Surface
 
-- `services/history.ts`: `createOwnedScheduleHistory` injects the schedule manager and `ScheduleRunReader` into `@cogni/scheduling`.
-- Dependencies: `@cogni/ids`, `@cogni/scheduling`, and `@/ports/server`.
+- `createScheduleHistoryService` — schedule and history reads
+- `ScheduleHistoryNotFoundError` — missing or foreign schedule
 
-## Responsibilities
+## Invariants
 
-- Validate caller identities before node-owned schedule lookup.
-- Delegate ownership checks, metadata mapping and cursor behavior to the published package.
-- Leave route authentication, database composition, React components and styling in the Toks5 app.
-
-## Notes
-
-- No SQL duplication, database pools, transcript reads or execution ownership here.
-- Existing GraphExecutor and Temporal wiring remain unchanged.
+- Schedule ownership is required independently of run requester identity.
+- Metadata projects nullable stateKey without loading any thread content.
+- Existing chat routes authorize and display linked conversations.
+- Runtime status is not task success. No execution or persistence side effects.

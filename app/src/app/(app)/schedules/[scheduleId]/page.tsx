@@ -1,16 +1,26 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Authenticated Toks5 schedule history shell; API independently checks ownership. */
-import { redirect } from "next/navigation";
+/**
+ * Module: app/schedules/[scheduleId]/page
+ * Purpose: Authenticated schedule history page shell.
+ * Scope: Session and path checks only; data reads enforce ownership separately.
+ * Invariants: No public schedule content.
+ * Side-effects: IO (session)
+ * Links: https://cognidao.org/work/items/task.5353
+ * @public
+ */
+import { ScheduleParamsSchema } from "@cogni/node-contracts";
+import { notFound, redirect } from "next/navigation";
 import { getServerSessionUser } from "@/lib/auth/server";
-import { ScheduleHistoryView } from "./view";
-
-export default async function ScheduleHistoryPage({
+import { ScheduleDetailView } from "./view";
+export default async function ScheduleDetailPage({
   params,
 }: {
   params: Promise<{ scheduleId: string }>;
 }) {
   if (!(await getServerSessionUser())) redirect("/");
-  return <ScheduleHistoryView scheduleId={(await params).scheduleId} />;
+  const parsed = ScheduleParamsSchema.safeParse(await params);
+  if (!parsed.success) notFound();
+  return <ScheduleDetailView scheduleId={parsed.data.scheduleId} />;
 }

@@ -14,6 +14,10 @@
  */
 
 export * from "./agent.register.v1.contract";
+export * from "./agent.access-requests.v1.contract";
+export * from "./agent.roles.v1.contract";
+export * from "./agent.mine.v1.contract";
+export * from "./agent.credentials.v1.contract";
 // ── AI contracts ────────────────────────────────────────────────────────────
 export * from "./ai.activity.v1.contract";
 export * from "./ai.agents.v1.contract";
@@ -64,12 +68,13 @@ export * from "./grants.validate.internal.v1.contract";
 export * from "./graph-runs.create.internal.v1.contract";
 export * from "./graph-runs.update.internal.v1.contract";
 export * from "./graphs.run.internal.v1.contract";
-export * from "./history.v1.contract";
-export * from "./identity.attestation.v1.contract";
 // ── HTTP (ts-rest router + OpenAPI) ─────────────────────────────────────────
 export * from "./http/openapi.v1";
 export * from "./http/router.v1";
+export * from "./identity.attestation.v1.contract";
+export * from "./knowledge.browse.v1.contract";
 // ── Knowledge ───────────────────────────────────────────────────────────────
+export * from "./history.v1.contract";
 export * from "./knowledge.contributions.v1.contract";
 export * from "./knowledge.domains.v1.contract";
 export * from "./knowledge.index.v1.contract";
@@ -93,6 +98,7 @@ export * from "./runs.stream.v1.contract";
 // ── Schedules ───────────────────────────────────────────────────────────────
 export * from "./schedules.create.v1.contract";
 export * from "./schedules.delete.v1.contract";
+export * from "./schedules.history.v1.contract";
 export * from "./schedules.list.v1.contract";
 export * from "./schedules.update.v1.contract";
 // ── Setup ───────────────────────────────────────────────────────────────────
@@ -104,8 +110,9 @@ export * from "./users.ownership.v1.contract";
 export * from "./users.profile.v1.contract";
 // ── VCS ─────────────────────────────────────────────────────────────────────
 export * from "./vcs.flight.v1.contract";
-export * from "./work.items.create.v1.contract";
+export * from "./work.items.artifacts.v1.contract";
 export * from "./work.items.coordination.v1.contract";
+export * from "./work.items.create.v1.contract";
 export * from "./work.items.delete.v1.contract";
 export * from "./work.items.get.v1.contract";
 export * from "./work.items.list.v1.contract";

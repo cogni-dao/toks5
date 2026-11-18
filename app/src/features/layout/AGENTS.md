@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
+- **Last reviewed:** 2026-11-08
 - **Parent:** [features](../AGENTS.md)
 
 ## Purpose
@@ -30,7 +31,7 @@ App-shell layout components: header, footer, sidebar, and top bar. Composes kit/
 
 ## Public Surface
 
-- **Exports:** `AccountSlot`, `AppHeader`, `AppFooter`, `AppSidebar`, `AppTopBar` via `index.ts`
+- **Exports:** `AccountSlot`, `AppHeader`, `AppFooter`, `AppShell`, `AppSidebar`, `AppTopBar` via `index.ts`
 - **Files considered API:** `index.ts`
 
 ## Responsibilities
@@ -47,7 +48,7 @@ pnpm build
 
 ## Standards
 
-- All vendor/shadcn imports must go through `@/components` barrel — never import vendor paths directly.
+- All vendor/shadcn imports must go through `@/components` or the public `@/components/startup` entry — never import vendor paths directly.
 - Sidebar tokens (`sidebar-*`) are part of the design system (registered in ESLint allowlist).
 - `AppSidebar` uses Zustand store (`useChatSidebarStore`) to bridge chat thread state from the chat page — sidebar is a sibling of content, not an ancestor.
 
@@ -65,4 +66,5 @@ pnpm build
 ## Notes
 
 - `AppHeader` is used in `(public)` layout; `AppSidebar` + `AppTopBar` are used in `(app)` layout.
+- `AppShell` is shared by protected pages and the authenticated SIWE handoff; its geometry must stay identical across that navigation.
 - Chat thread state bridged via Zustand because sidebar is a sibling of page content, not an ancestor (React context wouldn't work).

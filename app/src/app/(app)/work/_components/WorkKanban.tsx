@@ -3,10 +3,10 @@
 
 /**
  * Module: `@app/(app)/work/_components/WorkKanban`
- * Purpose: Binds the shared `WorkBoard` from `@cogni/knowledge-base-ui` to this node's summary DTO and router links (task.0044, task.0056).
+ * Purpose: Binds the shared `WorkBoard` from `@cogni/knowledge-base-ui` to this node's summary DTO and router links (task.0041, task.0055).
  * Scope: Adapter only. Board markup and behavior live in the package; this node keeps data loading, URL state and routing.
  * Side-effects: none
- * Links: task.0044, story.0018
+ * Links: task.0041, task.0044, packages/knowledge-base-ui/src/work-board.tsx
  * @internal
  */
 

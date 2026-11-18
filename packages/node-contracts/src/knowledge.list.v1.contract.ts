@@ -14,10 +14,6 @@
  * @internal
  */
 
-import { KnowledgeRowSchema } from "@cogni/knowledge-store/contracts";
-
-export { KnowledgeRowSchema } from "@cogni/knowledge-store/contracts";
-
 import { z } from "zod";
 
 export const KnowledgeListQuerySchema = z.object({
@@ -29,7 +25,8 @@ export const KnowledgeListQuerySchema = z.object({
 });
 export type KnowledgeListQuery = z.infer<typeof KnowledgeListQuerySchema>;
 
-export type KnowledgeRow = z.infer<typeof KnowledgeRowSchema>;
+import { KnowledgeRowSchema } from "@cogni/knowledge-store/contracts";
+export { KnowledgeRowSchema, type KnowledgeRow } from "@cogni/knowledge-store/contracts";
 
 export const KnowledgeListResponseSchema = z.object({
   items: z.array(KnowledgeRowSchema),

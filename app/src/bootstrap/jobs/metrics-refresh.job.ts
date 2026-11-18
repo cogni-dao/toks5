@@ -8,7 +8,6 @@ import {
 } from "@cogni/node-shared";
 import { getContainer } from "@/bootstrap/container";
 import { getNodeId } from "@/shared/config";
-import { makeLogger } from "@/shared/observability";
 export const METRICS_REFRESH_ROUTE = "/api/internal/metrics/refresh";
 export async function ensureMetricsRefreshSchedule() {
 	const container = getContainer();
@@ -66,29 +65,4 @@ export async function runMetricsRefresh(executionGrantId: string) {
 	);
 	if (!c.goalMetrics) throw new Error("metrics_unavailable");
 	return c.goalMetrics.refreshDue();
-}
-
-// Boot activation: once per process, bounded retry; unit-test processes stay
-// inert. The manual ops route (/api/internal/ops/metrics/sync) remains.
-let metricsStarted = false;
-const MAX_ATTEMPTS = 8;
-const RETRY_DELAY_MS = 15_000;
-export function startMetricsSyncOnBoot(): void {
-	if (metricsStarted) return;
-	// biome-ignore lint/style/noProcessEnv: startup gate before container config
-	if (process.env.APP_ENV === "test" || process.env.VITEST === "true") return;
-	metricsStarted = true;
-	void reconcileMetricsSchedule(1);
-}
-async function reconcileMetricsSchedule(attempt: number): Promise<void> {
-	try {
-		await ensureMetricsRefreshSchedule();
-	} catch (error) {
-		makeLogger({ component: "metrics-refresh" }).warn(
-			{ err: error, kind: "metrics", attempt, exhausted: attempt === MAX_ATTEMPTS },
-			"Schedule startup reconcile failed",
-		);
-		if (attempt < MAX_ATTEMPTS)
-			setTimeout(() => void reconcileMetricsSchedule(attempt + 1), RETRY_DELAY_MS);
-	}
 }

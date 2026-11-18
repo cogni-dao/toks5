@@ -1,0 +1,148 @@
+# work-items · AGENTS.md
+
+> Scope: this directory only. Keep ≤150 lines. Do not restate root policies.
+
+## Metadata
+
+- **Owners:** @cogni-dao
+- **Status:** stable
+- **Last reviewed:** 2026-11-07
+
+## Purpose
+
+Work item port interfaces, domain types, and storage adapters for structured work item management. Root entry (`@cogni/work-items`) exports types/interfaces and database-neutral content/lease composition. Adapter entries expose the legacy markdown implementation and the shared Doltgres implementation used by every node-owned work-item store.
+
+## Pointers
+
+- [Development Lifecycle](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md): Status enum and transition rules
+- [Identity Model](https://cognidao.org/knowledge/node-template-identity-model): Actor kinds for SubjectRef alignment
+- [Packages Architecture](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/packages-architecture.md): Package conventions
+
+## Boundaries
+
+```json
+{
+  "layer": "packages",
+  "may_import": [],
+  "must_not_import": [
+    "app",
+    "features",
+    "ports",
+    "core",
+    "adapters",
+    "shared",
+    "services",
+    "packages"
+  ]
+}
+```
+
+**External deps:** `zod` (canonical wire schema), `type-fest` (Tagged branded types), `yaml` (frontmatter parsing — adapter only). Doltgres adapter alone bundles `@cogni-dao/doltgres-admission` for the shared engine writer protocol; root/content/lease ports stay database-neutral.
+
+## Public Surface
+
+- **Exports (root `@cogni/work-items`):**
+  - `WorkItemId`, `Revision`, `WorkItemType`, `WorkItemStatus`, `ActorKind` — identity and enum types
+  - `SubjectRef`, `ExternalRef`, `RelationType`, `WorkRelation` — structured domain types
+  - `toWorkItemDto` — spread-first read serializer with actor omission and derived rank
+  - `WorkItemSummarySchema`, `WorkItemSummary` — projected Work list contract without detail or leases
+  - `WorkItem`, `WorkQuery` — full work item type and query filter; rank bounds are inclusive and exclude unknown rank when set; projectIds is any-of
+  - `WORK_ITEM_SORT_FIELDS`, `WORK_ITEM_SORT_DIRECTIONS`, `normalizeWorkItemOrder`, `compareWorkItems` — canonical ordering; default rankScore DESC, unknown last, id ASC
+  - `WorkItemSortBy`, `WorkItemSortDirection`, `WorkItemOrder` — shared order types
+  - `toWorkItemId(raw: string): WorkItemId` — boundary constructor
+  - `WorkItemQueryPort`, `WorkItemCommandPort` — read/write interfaces
+  - `STATUS_ORDER`, `LEGACY_STATUSES`, `statusRank`, `isLegacyStatus`, `FORWARD_TARGETS`, `VALID_TRANSITIONS`, `isValidTransition(from, to): boolean` — the stage order (task.0122, hub work-status-ladder): triage < research < design < design_review < implement < implementation_review < validation < merge < done. `VALID_TRANSITIONS` is the structural table (its keys are the board columns; the legacy `blocked` and `needs_closeout` follow the ladder): any move back or to cancelled, a forward move only to a stage that can follow its source on some path, nothing out of done or cancelled, nothing into a legacy status
+  - `evaluateMove(itemAfter, from, to, artifacts, facts)` → `{ ok } | { ok: false, code: "gate_unmet" | "facts_unavailable", missing }`, `gateNeeds`, `classifyDeliverable(pr, repos?)`, `parsePullRequestUrl`, `GATE_CHILDREN_MAX` (50), `TRIAGE_SCORE_AXES` (goal, time, unblocks, ease, confidence, agent), `refusesPathChange`, `planPlacement`, ports `PrFactsPort` (`read(url, signal)` → `{ head, merged }`), `InboxStatePort` (`stateOf(id, signal)` → `{ head, merged } | null`), `placementFor`, `PLACEMENT_REASONS`, `WorkItemGateUnmetError` (→ 409 `gate_unmet` with `from`, `to`, `missing`), `WorkItemGateFactsUnavailableError` (→ 503 `gate_facts_unavailable`) — the ONE move predicate (task.0122, story.0047), pure. FORWARD_IS_ONE_STAGE: `to` must be the next stage on the item's path (triage picks the route; a story goes implement → validation → done, an inbox deliverable skips validation, a spike goes research → done) and the exit artifact of `from` must hold: the latest of its kind (highest `seq`) on THIS item with `itemRevision` >= the item's `statusRevision`, a passing verdict, judging the current head. Exits: triage = a triage artifact naming the route + the six named axes (`TRIAGE_SCORE_AXES`) each nonzero + a `goal:` label + `moves` or a gap in the artifact note; design review = approve at the inbox head; implement = `pr` is a deliverable (a story: >= 1 child done, the rest done or cancelled); implementation review = approve at the current head; validation = PASS-grade at the approved head (the head of the latest implementation review, which must be approve; a later request_changes voids it); merge = a PR deliverable: the latest validation (highest `seq`, written after the approval) PASS-grade at the approved head, and the PR merged at that head; an inbox deliverable: the inbox merged at the approved head. PATH_CHANGES_ONLY_VIA_TRIAGE: a patch that changes the kind of `pr` (PR or inbox) at needs_implementation_review or later is refused unless it moves the item back to needs_implement or earlier. BACK_IS_FREE: to needs_triage, an earlier stage on the path or cancelled; a jump or an exit from done or cancelled is refused. The adapter runs it inside the writer lock on the row after the patch and stamps `status_revision = revision + 1` on every status change (`create` accepts only needs_triage). The PR read happens BEFORE the lock (5 s timeout through to the fetch, 60 s cache per PR URL, a failure remembered 10 s; a failure is 503 and nothing is written); inbox state (all reads share one `queryTimeoutMs` deadline), artifacts and a story's children (cap 50, more fails closed) are read inside it. `planPlacement(id)` and `place({id, to}, principal)` are the one-shot cutover (hub work-status-ladder): `place` re-reads the PR (PR-facts port) or inbox state ITSELF, moves an item out of needs_closeout or blocked with no exit artifact only to the stage that plan names, and refuses any `to` that is not its own plan, any other source (migration 0008 moves needs_merge to needs_closeout first, so a ladder stage can never be placed), `needs_research` for a non-spike, and `done` unless it read the deliverable merged. The caller is `scripts/db/place-legacy-work-items.mjs`, run ONCE per node by the operator against that node's Doltgres through its custody, after migration 0008 and the app deploy (dry run by default, `--apply` writes, idempotent: a placed item is no longer a source). A `deployVerified` write logs `adapter.work_items.deploy_verified_write` and is not rejected yet
+  - `WorkItemScore(s)`, `parseWorkItemScores(input)`, `rankScore(scores)`, `WorkItemScoresInvalidError` — the only `scores` bounds and WSJF rank (story.5111); every write path calls the parser, nobody re-states the rules
+  - `WorkItemPatchInputSchema`, `WorkItemPatchStatusSchema`, `WorkItemScoresInputSchema`, `WorkItemPatchInput` — the one PATCH input schema: `PATCH /api/v1/work/items/{id}` (node-contracts `workItemsPatchOperation.input`) and the agent tool `core__work_item_update` share it (task.0065)
+  - `ChangeReasonSchema`, `HistoryEntrySchema`, `HistoryOutputSchema`, `HistoryOutput`, `workItemsHistoryOperation` — history wire schemas (task.0052, story.0023); node-contracts re-exports them. A history item carries `cites: [{ id, commit, contribution? }]` (empty when none)
+  - `checkChangeReason`, `normalizeChangeReason`, `CHANGE_REASON_REQUIRED_MESSAGE`, `ChangeReasonInvalidError`, `CHANGE_REASON_MAX_CHARS` (240), `CHANGE_REASON_MAX_WORDS` (25) — REASON_REQUIRED (task.0086): every patch carries a reason; line breaks (CR, LF, U+0085, U+2028, U+2029) become spaces, trim, 1–240 chars, ≤25 words, no NUL. The zod schema and the adapter call the same function
+  - `CiteRefSchema`, `CITE_MAX` (8), `CITE_ID_PATTERN`, `CITE_CONTRIBUTION_PATTERN`, `EntryResolver` (port: `resolve(refs, "cite", signal)` → `{ id, commit, plane, contribution? }[]`), `EntryUnresolvedError` (→ 400 `cite_unresolved`), `EntryResolverUnavailableError` (→ 503), `CitesUnsupportedError` (no resolver wired → 400 `cites_unsupported`), `CitesInvalidError`, `formatCitesTrailer`, `parseCitesTrailer` — pinned cites (task.0086). `@cogni-dao/knowledge-store` implements the port
+  - `WorkItemMove`, `MoveInput`, `MetricBaselinePort`, `MoveReadingPort`, `MoveReading`, `JudgedMove`, `MoveInputSchema`, `MOVES_MAX` (3), `MOVE_METRIC_ID_MAX` (40), `moveIssues`, `parseStoredMoves`, `pinMoves`, `judgeMove`, `judgeMoves`, `composeItemEnvelope`, `ItemLinksPort`, `EnvelopeDegradedEvent`, `readMoveContext`, `withMoveContext`, `runBounded`, `MoveContext`, `MovesInvalidError` (→ 400 `moves_invalid`), `MovesUnsupportedError` (→ 400 `moves_unsupported`) — work items name the metrics they move (story.0033, 0.10.0): PATCH `set.moves` = `[{ metricId, direction: "up"|"down" }]`, at most 3, `[]` = moves nothing (the reason says why); any other key a client sends is dropped. POST create takes `moves` too (`WorkItemMovesInputSchema` is the one schema; the baseline is pinned once before the insert). Only ids NEW on the item are resolved with `EntryResolver` under rule `"metric"` (`EntryUnresolvedError` with `field: "moves"`, an id that is unknown or deprecated); a stored entry is kept even if its metric was deprecated since, and a read shows it `unknown` / `metric_deprecated` (`MoveMetricGoneError` from the reading port). A baseline reader that fails or hangs is `MetricBaselineUnavailableError` (→ 503 `metric_baseline_unavailable`). The server pins `baselineObservationId` (the metric's latest good observation, `null` when none) when an entry first appears and never changes it; remove and re-add pins a new one. The Doltgres adapter needs `entryResolver` AND `metricBaseline` (`MetricBaselinePort.latestObservationId`) for a non-empty write; both run inside the writer lock before the branch. This package never imports `@cogni-dao/metrics`. A read adds `{ baseline, current, moved: as_declared|against|flat|unknown, unknownReason? }` through `judgeMoves(moves, MoveReadingPort)`: at most one baseline and one latest lookup per move, one deadline, a failure reads `unknown`, never zero. The single-item read (task.0118, 0.13.0) is ONE composition, `composeItemEnvelope(item, { readings, links, log }, { signal, deadline, includeLinks, chain })`, called by both the HTTP facade and the agent tool's capability, so a node that bumps this package gets the same envelope in both. It runs the readings, the chain and (on `includeLinks`) the first citation page together under one deadline (`MOVES_DEADLINE_MS` ceiling, the caller's signal and deadline; `runBounded` is the shared bound, a hung port ends at the deadline and a cancelled request ends the wait at once). The node supplies two ports: `MoveReadingPort` and `ItemLinksPort.firstPage(id, signal)` (its citations read; the node-owned adapter is `createCitationLinksPort` in the app's `bootstrap/capabilities/citation-links.ts`, the one deliberate node port). Each degraded part emits one `EnvelopeDegradedEvent { part: "chain"|"links", workItemId, reason (an error name or fixed code, never content), unresolved?, of? }` through `log`; a part that fails never fails the read. The chain: the optional `MoveReadingPort.context(metricIds, signal)` returns `{ metric: {id,title,unit,display?}, kpi?: {metricId,title,comparator,target,status?}, goal?: {id,title} }` per id, run beside the readings in the same deadline; an id it cannot resolve, a failure, a timeout or no port marks the move `context: "unavailable"` and adds none of the three, never a guess. The item DTO also gains an optional `links: { items, nextCursor, unavailable? }` (the `?include=links` first citation page; `CitationLinksPageSchema` is the `GET /api/v1/citations/{id}` body). All of it is on the one `WorkItemDtoSchema`, so the wire DTO and tool output derive it; list and summary reads never carry it. **Migrate `work_items.moves` (app migration `0005_work_item_moves`) before any reader runs this version.** The markdown adapter throws `UnsupportedWorkItemFieldError("moves")`
+  - `workItemWriteErrorResponse(error, "create" | "patch")` → `{ status, errorCode, message, body } | undefined`, `WORK_ITEM_WRITE_ERROR_NAMES` — the one HTTP answer for every write error (scores, reason, cites, moves, resolver and baseline failures, revision conflict, write-outcome-unknown, id already exists) (task.0097, 0.11.0). It matches by error `name`, never `instanceof` (the root and adapter bundles hold separate class copies), and takes `errorCode` from a fixed table, so a copy that lost its fields still maps. `body` is the default wire body; a node with its own envelope builds it from `status`, `errorCode`, `message` and `body`. Any other error returns `undefined`: auth, 404, 403 and backend-unavailable answers stay in the node. A test fails when a table row is dropped, and when an exported `*Error` class is neither mapped nor listed as unmapped
+  - `toWorkItemsPatchInput(wire)`, `toWorkItemsCreateInput(wire)`, `WORK_ITEM_CREATE_FIELDS` — the store input from a parsed request or tool input: ids branded, `undefined` dropped, the package's own field list forwarded (a compile-time check keeps the list equal to the store's create input); a node-only key stops there. The HTTP facade and the capability both call them, so a new contract field reaches a node with a pin bump
+  - `readWorkItemHistory(store, id)`, `WorkItemHistoryStore`, `WorkItemHistoryResult`, `HistoryReadLog` — framework-agnostic handler returning `{ status, body, log }` (200, 404, 503; never throws); the node route owns auth and logging
+  - `recordWorkItemArtifact(deps, itemId, principalId, body)`, `listWorkItemArtifacts(deps, itemId)` → `{ status, body, log }` (201/200, 400, 404, 409, 503; never throw; every 4xx body has an `errorCode`; a `WorkItemWriteOutcomeUnknownError` is a distinct 409 `work_item_write_outcome_unknown`, `retryable: false`; every non-success write logs `work.items.artifact_refused`, a 503 with `dbCode` and `errorMessage`), `artifactInvalidJson`, `artifactsNotConfigured`, `WorkItemArtifactInputSchema`, `WorkItemArtifactSchema`, `WorkItemArtifactsLatestSchema`, `WorkItemReadDtoSchema` (the item DTO plus `artifacts`), `ScorecardRowSchema`, `isPassGrade(rows, verdict)`, `parseArtifactSubject`, `toLatestArtifacts`, `withPassGrade`, `ARTIFACT_KINDS`, `workItemsArtifactsCreateOperation`, `workItemsArtifactsListOperation`, ports `WorkItemArtifactStore` (insert, list, latest; no update, no delete), `ItemArtifactsPort` — immutable artifacts (task.0028; design: hub `work-item-artifacts`, `work-status-ladder`). Kinds: `triage` (subject `work:<itemId>`, this item; verdict `research`, `design` or `implement`), `design_review` (subject `knowledge:<contrib-id>@<head commit>`), `implementation_review` (subject `<PR URL>@<40-hex head>`, or `knowledge:` for an inbox deliverable), `validation` (subject `<PR URL>@<40-hex head>`, or `<origin>@<40-hex buildSha>` for a story). Reviews take `approve` or `request_changes`, a validation `pass`, `notes` or `fail` plus the canonical scorecard `rows` (`[{ tweak, human, ai, loki, trace, overall, reason? }]`, cells exactly as /validate-candidate prints them). Optional `note` (one line, at most 240 characters), `body` (at most 16000, the full review when no PR comment holds it) and `url`; a review or validation needs a `url` or a `body`. The author is the authenticated principal and `itemRevision` is the item's revision read inside the writer lock; neither comes from the body. A build subject must name this hub's own origin (`deps.ownOrigin`, the app's configured public origin), else 400. AUTHOR_IS_AUDIT_ONLY: the stored `author` is a server-stamped record for audit; no server check compares it with the subject's author (an inbox's principal, who set `pr`, who moved a story), and the move predicate never reads authorship; fresh-context review is a rule in the review skills. A PR subject must be the item's own `pr`, else 400. The item read carries the latest of each kind WITHOUT `body`; the list carries it. Order is `seq`, a per-item integer (1, 2, 3...) the store assigns inside the writer lock as the item's highest plus one, in the preflight with `itemRevision` (a missing item is a clean 404, no branch); the latest of a kind is its highest `seq`, never the clock, and a unique `(item_id, seq)` index backs it. The commit carries `Seq: <n>` and the branch proof requires the row's `seq` to equal it. `isPassGrade`: no FAIL or DRIFT row, a `reason` on each UNPROVEN or INDIRECT row, `fail` never, no rows never. Recording never changes status. `composeItemEnvelope` takes an optional `artifacts` port and adds the latest of each kind (one call; a failure, or one stored row that does not parse as an artifact, reads `{ unavailable: true }`); `options.artifacts: false` skips it. Migrate `work_item_artifacts` (app migrations `0006_work_item_artifacts` then `0007_work_item_artifact_sequence`: `seq`, `item_revision`, `note`, `body` and the unique `(item_id, seq)` index) before any reader or writer runs this version; a node without the table reads `artifacts.unavailable` and refuses a write with 503. Known limit, rollback: reverting this code does not undo 0006 or 0007 (Doltgres DDL is forward-only and the migrator never runs down); older code ignores the table and its rows, and newer code needs 0007 applied. Rows written before 0007 carry `seq` 0 and `item_revision` 0 (the column defaults), so they never outrank a server-assigned `seq`
+- **Exports (adapter `@cogni/work-items/markdown`):**
+  - `MarkdownWorkItemAdapter` — implements QueryPort + CommandPort against markdown files
+  - `StaleRevisionError` — thrown on optimistic concurrency conflict
+  - `InvalidTransitionError` — thrown on invalid status transition
+  - `UnsupportedWorkItemFieldError` — thrown when create/patch names `scores` (Doltgres-only); nothing is written
+- **Exports (adapter `@cogni/work-items/adapters/doltgres`):**
+  - `DoltgresWorkItemAdapter` — node-local content query/create/patch; hard delete fails with a typed retirement error
+  - `DoltgresWorkItemAdapter.artifacts` (`WorkItemArtifactStore`) — insert is one `INSERT INTO work_item_artifacts` on an operation branch, added with `dolt_add('work_item_artifacts')`, committed as `work-items: artifact <itemId> by actor:<principal>` + `Reason:` + `Artifact: <id>`, merged and proven like a patch (the branch proof accepts exactly one added row of that table matching the item, author and id); list reads newest first, at most 50; latest reads the newest row of each kind in one query. `withWorkItemLeases` forwards it
+  - `createDoltgresWorkItemStore(sql, options)` — the supported way to build the store (task.0097): `entryResolver` and `metricBaseline` are required options, each a port or `null` ("this node serves none"); omitting one is a type error at the pin bump and throws at construction; a baseline with no resolver throws. `new DoltgresWorkItemAdapter(sql, opts)` keeps its optional options for wrappers (poly, levelup), which pass the resolver through their own options
+  - `WorkItemRevisionConflictError` — `patch` with a stale `expectedRevision`; nothing committed
+  - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`) (create/patch reject invalid `scores` with `WorkItemScoresInvalidError` before any SQL); `entryResolver` pins a patch's `cites`
+  - cursor codec + Doltgres port/error types
+  - `WORK_SUMMARY_PAGE_DEFAULT` (25), `WORK_SUMMARY_PAGE_MAX` (100), `WORK_BOARD_COLUMN_PAGE` (20), `WORK_SUMMARY_LIST_MAX` (50 values per list filter), `WORK_SUMMARY_TEXT_MAX` (200 chars); `parseWorkSummarySearchParams` / `workSummaryQueryToSearchParams` — the one query codec the browser encodes and the route decodes with; `WorkSummaryPageSchema` (task.0055)
+  - `WORK_TEXT_SCAN_MAX_ROWS` (1000, root + Doltgres entry) — rows one text search may scan — this applies to full `list` too (`GET /api/v1/work/items?text=…`, `core__work_item_query`), so any text page may be empty with a cursor; at the cap the page returns its matches with `hasMore` and an `endCursor` at the last SCANNED row (a page that fills first continues after its last RETURNED match); `pageInfo.rowsScanned` reports the rows read. `listSummaries(query, { signal, deadline, maxScanRows })` only tightens bounds and clamps to 100 rows; full `list` keeps 500
+  - `handleWorkSummariesRequest` / `handleWorkBoardRequest` → `{ status, body, telemetry }`, `classifyWorkReadError`, `WORK_READ_ERROR_CODES` — framework-neutral route logic; a node route is auth + logging + one call
+  - `DoltgresWorkItemAdapter.listBoardColumns(query, statuses, perColumn)` (optional `WorkItemsPort.listBoardColumns`, forwarded by `withWorkItemLeases`) — boards without text read every column in ONE native query (CTE of bracketed per-status page SQL joined by UNION ALL, `LIMIT perColumn + 1` each); column cursors are byte-identical to `listSummaries({ ...query, statuses: [status], limit: perColumn })`. Never composes text
+  - `loadWorkBoardColumns(list, query, statuses, { perColumn, signal, budgetMs, maxScanRows, listColumns })` — with `listColumns` and no text: one composed call — ONE admission deadline (`WORK_BOARD_READ_BUDGET_MS`) and ONE rows-scanned budget per board; unreached columns come back `state: "not_started"` (no items, no cursor). POOL_SAFETY: a caller `deadline` only gates admission of the next column/text batch (a cut page returns matches + continuation); native timeouts and reader-pool retirement stay on `queryTimeoutMs`; `parseWorkBoardSearchParams`, `WorkBoardColumnsSchema`, `WORK_BOARD_STATUSES` — bounded board read: one summary page per visible status, read sequentially (the reader pool is width one, and each call owns its read deadline), column cursors valid for `/summaries?statuses=<status>&…&cursor=`; pure over an injected `listSummaries`
+- **Files considered API:** `src/index.ts`, `src/adapters/markdown/index.ts`, `src/adapters/doltgres/index.ts`
+
+## Ports
+
+- **Uses ports:** none
+- **Implements ports:** `WorkItemQueryPort`, `WorkItemCommandPort` (via MarkdownWorkItemAdapter and DoltgresWorkItemAdapter)
+
+## Responsibilities
+
+- This directory **does**: Define port interfaces, domain types, transition rules, and the markdown adapter
+- This directory **does not**: Import from `@/` or `src/`, depend on app-layer or service code
+
+## Usage
+
+```bash
+pnpm --filter @cogni/work-items typecheck
+pnpm --filter @cogni/work-items build
+pnpm vitest run packages/work-items/tests/
+```
+
+## Standards
+
+- Root entry: no environment/pool/framework imports; orchestration delegates to injected ports.
+- Adapter entries: I/O allowed, but no `@/` or app `src/` imports
+- No `as WorkItemId` casts outside test fixtures — use `toWorkItemId()` at boundaries
+
+## Dependencies
+
+- **Internal:** none
+- **External:** `type-fest` (Tagged branded types), `yaml` (YAML parse/stringify)
+
+## Change Protocol
+
+- Update this file when types, ports, or transition rules change
+- Coordinate with development-lifecycle.md for status/transition changes
+- Coordinate with identity-model.md for SubjectRef kind changes
+
+## Notes
+
+- `toWorkItemId()` does no format validation — WorkItemIds include both numeric (`task.0149`) and slug-based (`proj.agentic-project-management`) formats
+- `MarkdownWorkItemAdapter` constructor takes `workDir` (repo root) — scans `work/items/` and `work/projects/`
+- `blocked` and `needs_closeout` are read but never entered; a legacy item goes back to triage, is cancelled, or is placed by the cutover job
+- Dolt ID allocation is inside the common per-database writer scope; never move it before admission.
+
+## Operational leases
+
+Work-item leases live in PostgreSQL `work_item_leases`; shared package `@cogni-dao/work-items/adapters/postgres` owns atomic principal/run/token predicates. Heartbeat and release return lease-only data and never call Dolt. Runtime uses the service-role pool; RLS denies app-role SQL. Content get/list project this authority via `withWorkItemLeases`. Old Dolt lease columns are historical evidence, never current authority.
+
+## Reader fault containment
+
+A read has its own deadline and never enters writer admission. Reader timeout retires only the captured generation, gracefully drains siblings and permits at most one replacement; maximum two generations. Runtime factories must budget the overlap. Explicit `readConnectionBudget` fails closed on unknown or invalid public pool widths. The template uses max 1 per reader generation, at most two reader connections plus one writer. See [README](README.md) for cutover and fault proof limits.
+
+- ONE_ENFORCER (task.0086): `DoltgresWorkItemAdapter.patch` applies the reason and cite rules for every writer (route, `core__work_item_update`, the capability, the guard, system writers). It validates before any SQL; with cites it calls the resolver in `preflight` (inside the writer lock, before the branch checkout) raced against one `queryTimeoutMs` deadline; a timeout or resolver failure releases the lock and writes nothing. The commit message is `work-items: patch <id> by actor:<p>`, `Reason: <reason>`, and a last `Cites: id@commit, id@contrib-…:commit` line built from the request plus validated commits, so no line can be forged. Crash recovery reads line one only (an artifact insert also its `Artifact:` and `Seq:` lines). History parsing matches each line from its start.
+- PATCH_CAS (task.5284): Doltgres `patch` with `expectedRevision` adds `AND revision = <expected>` to its UPDATE; a mismatch throws `WorkItemRevisionConflictError` and drops the empty op branch with no commit. Omitted = unconditioned, as before.
+- AUTHORITY_IS_NOT_KIND (bug.0019, supersedes COLLABORATOR_TRIAGE task.5284): `patch` never compares the writing principal to `created_by_principal_id`. The column is immutable attribution data. Who may patch is decided at the door by the one `authorize()` check (scope `work_item:transition`), on `work.items.patch` and on the guarded tool; the adapter only requires a non-blank principal, an unchanged creator, and a proven row diff.
+
+- Query cursors bind version, normalized result filters and sort; decoder callers pass the identity from `queryIdentity`; unbound old versions require restart; old/order-mismatched cursors require restart. Native SQL owns exact cursor keys. Timestamp ordering, projection and seek use the engine's public microsecond precision; hidden NOW() nanoseconds do not survive native text I/O. Text uses bounded ordered batches sharing one read deadline.
+
+
+## Known limits
+
+- `prRepos` (the app's optional `WORK_ITEMS_PR_REPO`, one or more comma-separated `owner/repo`) is not provisioned on every lane: runtime env is operator custody. Unpinned, the gate accepts a PR URL on any github.com repo as the code deliverable and the app logs `adapter.work_items.pr_repo_unpinned` once at boot, so an item can name a PR of another repository and pass its gates. A node (or a fork's cohort PR) pins it once the operator provisions the env.
+- Rolling back to a version without the artifact-table check while an orphan artifact branch exists stops writes until a forward deploy.
+- Authorship is audit only: the artifact records who wrote it, and nothing server-side requires a reviewer other than the author. Fresh-context review is a procedure rule in the review skills.
+- Triage alone decides that work needs no design; the `triage` artifact names who decided, so a review can sample them. A story validation names its origin; the gate accepts only this hub's own origin (the app passes `APP_BASE_URL`); with no `hubOrigin` configured a story validation is refused (fail closed).
+- Code-gate PR facts are cached 60 s per PR URL, so a push inside that window is seen on the next read; nodes that share an egress IP share GitHub's 60 reads per hour.

@@ -4,8 +4,9 @@
 /**
  * Module: `@app/api/v1/work/items/[id]/route`
  * Purpose: HTTP endpoints for getting, patching, and deleting a single work item by ID.
- * Scope: Auth-protected GET (node-local Doltgres first, markdown fallback), PATCH (Doltgres only), and DELETE (Doltgres hard-delete with dolt_log audit).
- * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, HARD_DELETE_RECOVERABLE_VIA_DOLT_REVERT.
+ * Scope: Auth-protected GET (node-local Doltgres first, markdown fallback), PATCH (Doltgres only), and DELETE (retired, HTTP 410).
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED.
+ * Evaluation: shared score validation failures return HTTP400 with typed issues.
  * Write errors (task.0097): `workItemWriteErrorResponse` from @cogni/work-items answers every write-contract error below; this route keeps only auth, 403, 404, node-admin and backend-unavailable.
  * Reason + cites (task.0086): a missing or over-cap reason is HTTP400 `invalid input` with an issue at `reason`; an unknown cite id or a closed inbox is HTTP400 `cite_unresolved`; cites with no resolver wired is HTTP400 `cites_unsupported`; a resolver failure is HTTP503. Nothing is written in each case.
  * Moves (story.0033): `set.moves` with an unknown or deprecated metric id is HTTP400 `cite_unresolved` with an issue at `set.moves`; a bad list is HTTP400 `invalid input`; a non-empty list with no metric wiring is HTTP400 `moves_unsupported`; a resolver failure is HTTP503 `cite_resolver_unavailable`; a baseline failure is HTTP503 `metric_baseline_unavailable`. The client never sets a baseline: the server pins it.
@@ -24,16 +25,16 @@ import { workItemWriteErrorResponse } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
 import {
-  deleteWorkItem,
   getWorkItem,
+  NodeAdminRequiredError,
   patchWorkItem,
   WorkItemForbiddenError,
   WorkItemNotFoundError,
   WorkItemsBackendNotReadyError,
-  NodeAdminRequiredError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,6 +50,7 @@ export const GET = wrapRouteHandlerWithLogging<{
   async (ctx, request, _sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
+
     // `?include=links` (comma list): optional envelope parts. Unknown parts are a 400, not ignored.
     const requested = new URL(request.url).searchParams
       .getAll("include")
@@ -94,13 +96,18 @@ export const GET = wrapRouteHandlerWithLogging<{
 /**
  * PATCH /api/v1/work/items/:id — Patch a work item (Doltgres only).
  *
- * The immutable authenticated principal must match the creator stamped when
- * the row was inserted. The path id remains authoritative over request data.
+ * Authorization is the same-door `authorize()` check (scope `work_item:transition`)
+ * run by the route wrapper; the creator stamped at insert is attribution, never a gate
+ * (bug.0019). The path id remains authoritative over request data.
  */
 export const PATCH = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
-  { routeId: "work.items.patch", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "work.items.patch",
+    sameDoor: "core__work_item_update",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     if (!sessionUser) {
@@ -108,12 +115,33 @@ export const PATCH = wrapRouteHandlerWithLogging<{
     }
 
     const { id } = await context.params;
+    // Every refusal ends in ONE registered terminal event with its errorCode (task.0122): ids and codes, never the body.
+    const refuse = (
+      status: number,
+      errorCode: string,
+      body: unknown,
+      extra: Record<string, string> = {}
+    ): NextResponse => {
+      ctx.log.info(
+        {
+          event: EVENT_NAMES.WORK_ITEMS_PATCH_REFUSED,
+          routeId: "work.items.patch",
+          outcome: "refused",
+          workItemId: id,
+          status,
+          errorCode,
+          ...extra,
+        },
+        EVENT_NAMES.WORK_ITEMS_PATCH_REFUSED
+      );
+      return NextResponse.json(body, { status });
+    };
 
     let body: unknown;
     try {
       body = await request.json();
     } catch {
-      return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+      return refuse(400, "invalid_json", { error: "invalid JSON body" });
     }
 
     if (
@@ -123,10 +151,7 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       body.id !== undefined &&
       body.id !== id
     ) {
-      return NextResponse.json(
-        { error: "body id must match path id" },
-        { status: 400 }
-      );
+      return refuse(400, "id_mismatch", { error: "body id must match path id" });
     }
 
     const parseResult = workItemsPatchOperation.input.safeParse({
@@ -134,10 +159,10 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       id,
     });
     if (!parseResult.success) {
-      return NextResponse.json(
-        { error: "invalid input", issues: parseResult.error.issues },
-        { status: 400 }
-      );
+      return refuse(400, "invalid_input", {
+        error: "invalid input",
+        issues: parseResult.error.issues,
+      });
     }
 
     try {
@@ -146,8 +171,15 @@ export const PATCH = wrapRouteHandlerWithLogging<{
         walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info(
-        { workItemId: id, citeCount: parseResult.data.cites?.length ?? 0 },
-        "work.items.patch_success"
+        {
+          event: EVENT_NAMES.WORK_ITEMS_PATCH_SUCCESS,
+          routeId: "work.items.patch",
+          outcome: "success",
+          status: 200,
+          workItemId: id,
+          citeCount: parseResult.data.cites?.length ?? 0,
+        },
+        EVENT_NAMES.WORK_ITEMS_PATCH_SUCCESS
       );
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
@@ -155,77 +187,59 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       // conflict, write outcome unknown, resolver and baseline failures) and matches by name.
       const mapped = workItemWriteErrorResponse(e, "patch");
       if (mapped) {
-        return NextResponse.json(mapped.body, { status: mapped.status });
+        // What the gate found: the stage move and the missing artifact or fact, never a body.
+        const { from, to, missing } = mapped.body as {
+          from?: unknown;
+          to?: unknown;
+          missing?: unknown;
+        };
+        return refuse(mapped.status, mapped.errorCode, mapped.body, {
+          ...(typeof from === "string" ? { from } : {}),
+          ...(typeof to === "string" ? { to } : {}),
+          ...(typeof missing === "string" ? { missing } : {}),
+        });
       }
       if (e instanceof WorkItemNotFoundError) {
-        return NextResponse.json({ error: e.message }, { status: 404 });
+        return refuse(404, "not_found", { error: e.message });
       }
       if (e instanceof WorkItemForbiddenError) {
-        return NextResponse.json({ error: e.message }, { status: 403 });
+        return refuse(403, "forbidden", { error: e.message });
       }
       if (e instanceof NodeAdminRequiredError) {
-        return NextResponse.json(
-          { error: e.message, errorCode: e.errorCode, action: e.action },
-          { status: e.status }
-        );
+        return refuse(e.status, e.errorCode, {
+          error: e.message,
+          errorCode: e.errorCode,
+          action: e.action,
+        });
       }
       if (e instanceof WorkItemsBackendNotReadyError) {
-        return NextResponse.json({ error: e.message }, { status: 503 });
+        return refuse(503, "backend_unavailable", { error: e.message });
       }
       throw e;
     }
   }
 );
 
-/**
- * DELETE /api/v1/work/items/:id — Hard-delete a work item from Doltgres.
- *
- * The deletion is captured as a dolt_log commit; recovery via dolt_revert
- * remains available. Idempotent at the contract level: a missing id returns 404,
- * not 500. Returns `{id, deleted: true}` on success.
- */
+/** Retired hard-delete: preserve versioned identity and provenance. */
 export const DELETE = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
   { routeId: "work.items.delete", auth: { mode: "required", getSessionUser } },
-  async (ctx, _request, sessionUser, context) => {
+  async (_ctx, _request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
-    if (!sessionUser) {
+    if (!sessionUser)
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
-
     const { id } = await context.params;
-
-    const inputParse = workItemsDeleteOperation.input.safeParse({ id });
-    if (!inputParse.success) {
-      return NextResponse.json(
-        { error: "invalid input", issues: inputParse.error.issues },
-        { status: 400 }
-      );
-    }
-
-    try {
-      const deleted = await deleteWorkItem(id, {
-        id: sessionUser.id,
-      });
-      if (!deleted) {
-        return NextResponse.json(
-          { error: `Work item not found: ${id}` },
-          { status: 404 }
-        );
-      }
-      ctx.log.info({ workItemId: id }, "work.items.delete_success");
-      return NextResponse.json(
-        workItemsDeleteOperation.output.parse({ id, deleted: true })
-      );
-    } catch (e) {
-      if (e instanceof WorkItemForbiddenError) {
-        return NextResponse.json({ error: e.message }, { status: 403 });
-      }
-      if (e instanceof WorkItemsBackendNotReadyError) {
-        return NextResponse.json({ error: e.message }, { status: 503 });
-      }
-      throw e;
-    }
+    const parsed = workItemsDeleteOperation.input.safeParse({ id });
+    if (!parsed.success)
+      return NextResponse.json({ error: "invalid input" }, { status: 400 });
+    return NextResponse.json(
+      workItemsDeleteOperation.output.parse({
+        error: "work_item_deletion_retired",
+        message:
+          "PATCH status=cancelled to preserve work-item identity and provenance",
+      }),
+      { status: 410 }
+    );
   }
 );

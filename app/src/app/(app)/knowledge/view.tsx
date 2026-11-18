@@ -3,14 +3,15 @@
 
 /**
  * Module: `@app/(app)/knowledge/view`
- * Purpose: Client knowledge dashboard. Single ReUI DataGrid that switches between
+ * Purpose: Client knowledge dashboard. Tab-intent dashboard with bounded Browse/Graph and legacy grids for
  *   Browse mode (knowledge entries on `main`) and Inbox mode (open external-agent
- *   contributions). One segmented toggle, URL-driven filters/sort/mode.
+ *   contributions), plus Graph, Chains and Domains peers. One WAI-ARIA
+ *   tablist and URL-driven mode.
  * Scope: Presentation. Fetches data via React Query; mutates via direct fetch.
  * Invariants:
  *   - HEADER_OWNS_SORT_AND_FILTER (column dropdowns).
  *   - SINGLE_COLUMNS_TOGGLE (toolbar, not per-column).
- *   - URL_DRIVEN_STATE (mode + filters persist in URL).
+ *   - URL_DRIVEN_MODE; inactive tabs do not start reads.
  *   - Cookie-session merges only — no Bearer header is ever sent from this page.
  * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, POST .../merge, POST .../close).
  * Links: https://node-template.cognidao.org/knowledge/knowledge-write-contract, [/work view](../work/view.tsx)
@@ -23,6 +24,7 @@ import type {
   ContributionRecord,
   DomainRow,
   DomainsListResponse,
+  KnowledgeBrowsePage,
   KnowledgeListResponse,
   KnowledgeRow,
 } from "@cogni/node-contracts";
@@ -33,7 +35,6 @@ import {
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
 import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
-import { Skeleton } from "@cogni/node-ui-kit/shadcn/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -57,17 +58,25 @@ import {
   Tags,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { Button, Input } from "@/components";
 
 import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
 import { fetchDomains } from "./_api/fetchDomains";
-import type { KnowledgeGraphResponse } from "./_api/fetchGraph";
 import { fetchKnowledge } from "./_api/fetchKnowledge";
 import { mergeContribution } from "./_api/mergeContribution";
 import { AddDomainSheet } from "./_components/AddDomainSheet";
+import { BoundedBrowse } from "./_components/BoundedBrowse";
 import { ContributionDetail } from "./_components/ContributionDetail";
 import { knowledgeColumns } from "./_components/columns";
 import { buildContributionColumns } from "./_components/contribution-columns";
@@ -75,7 +84,16 @@ import { domainColumns } from "./_components/domain-columns";
 import { GraphView } from "./_components/GraphView";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
 
-type ViewMode = "browse" | "domains" | "inbox" | "chains" | "graph";
+type ViewMode = "browse" | "graph" | "chains" | "domains" | "inbox";
+
+/** Tab order is the visual order; arrow keys walk it. */
+const MODES: readonly ViewMode[] = [
+  "browse",
+  "graph",
+  "chains",
+  "domains",
+  "inbox",
+];
 
 const EDO_ENTRY_TYPES: ReadonlySet<string> = new Set([
   "hypothesis",
@@ -99,43 +117,47 @@ function errorMessage(error: unknown): string {
 }
 
 interface KnowledgeDashboardViewProps {
-  /** SSR-seeded browse list — makes the entry count correct on first paint. */
+  /** SSR-seeded legacy Chains list; never read for Browse/Graph. */
   readonly initialList?: KnowledgeListResponse | undefined;
   /** SSR-seeded domain registry. */
   readonly initialDomains?: DomainsListResponse | undefined;
-  /** SSR-seeded graph — only present on a `?mode=graph` deep-link. */
-  readonly initialGraph?: KnowledgeGraphResponse | undefined;
+  /** Content-free seed for the Browse tab. Graph reads the whole corpus client-side, revalidated by revision (ETag/304). */
+  readonly initialBrowse?: KnowledgeBrowsePage | undefined;
 }
 
 export function KnowledgeDashboardView({
   initialList,
   initialDomains,
-  initialGraph,
+  initialBrowse,
 }: KnowledgeDashboardViewProps = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
 
-  const initialMode: ViewMode = isMode(searchParams.get("mode"))
-    ? (searchParams.get("mode") as ViewMode)
-    : "browse";
-  const [mode, setMode] = useState<ViewMode>(initialMode);
+  // The URL owns the mode. Local state only makes a click feel instant; it is
+  // re-synced whenever the URL changes (back/forward, refresh, deep link).
+  const rawMode = searchParams.get("mode");
+  const urlMode: ViewMode = isMode(rawMode) ? rawMode : "browse";
+  const [mode, setMode] = useState<ViewMode>(urlMode);
+  useEffect(() => setMode(urlMode), [urlMode]);
 
   const setModeUrl = useCallback(
     (next: ViewMode) => {
+      if (next === mode) return; // a no-op click adds no history entry
       setMode(next);
       const params = new URLSearchParams(searchParams.toString());
       if (next === "browse") params.delete("mode");
       else params.set("mode", next);
       const qs = params.toString();
-      router.replace(qs ? `/knowledge?${qs}` : "/knowledge", { scroll: false });
+      router.push(qs ? `/knowledge?${qs}` : "/knowledge", { scroll: false });
     },
-    [router, searchParams]
+    [mode, router, searchParams]
   );
 
   const knowledgeQuery = useQuery({
     queryKey: ["knowledge", "list"],
     queryFn: fetchKnowledge,
+    enabled: mode === "chains",
     staleTime: 30_000,
     initialData: initialList,
   });
@@ -143,6 +165,7 @@ export function KnowledgeDashboardView({
   const domainsQuery = useQuery({
     queryKey: ["knowledge", "domains"],
     queryFn: fetchDomains,
+    enabled: mode === "domains",
     staleTime: 30_000,
     initialData: initialDomains,
   });
@@ -150,10 +173,47 @@ export function KnowledgeDashboardView({
   const contributionsQuery = useQuery({
     queryKey: ["knowledge", "contributions", "open"],
     queryFn: () => fetchContributions("open"),
+    enabled: mode === "inbox",
     staleTime: 15_000,
   });
 
   const openCount = contributionsQuery.data?.contributions.length ?? 0;
+
+  const tabRefs = useRef(new Map<ViewMode, HTMLButtonElement>());
+  const onTabKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+    const current = MODES.findIndex(
+      (m) => tabRefs.current.get(m) === document.activeElement
+    );
+    if (current < 0) return;
+    const last = MODES.length - 1;
+    const next =
+      e.key === "ArrowRight"
+        ? current === last
+          ? 0
+          : current + 1
+        : e.key === "ArrowLeft"
+          ? current === 0
+            ? last
+            : current - 1
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? last
+              : null;
+    if (next === null) return;
+    e.preventDefault();
+    const target = MODES[next];
+    if (target) tabRefs.current.get(target)?.focus();
+  }, []);
+  const tabProps = (m: ViewMode) => ({
+    mode: m,
+    active: mode === m,
+    onClick: () => setModeUrl(m),
+    tabRef: (el: HTMLButtonElement | null) => {
+      if (el) tabRefs.current.set(m, el);
+      else tabRefs.current.delete(m);
+    },
+  });
 
   // A failed merge used to be swallowed — the button flipped back with zero
   // feedback and the contribution stayed open (bug.5120). Surface it INLINE on
@@ -191,15 +251,7 @@ export function KnowledgeDashboardView({
             Knowledge
           </h1>
           <span className="text-muted-foreground text-xs">
-            What this node has learned ·{" "}
-            {knowledgeQuery.data ? (
-              <>
-                {knowledgeQuery.data.items.length} entries on{" "}
-                <code className="font-mono">main</code>
-              </>
-            ) : (
-              <Skeleton className="inline-block h-3 w-28 align-middle" />
-            )}
+            What this node has learned · <code className="font-mono">main</code>
           </span>
         </div>
 
@@ -215,93 +267,99 @@ export function KnowledgeDashboardView({
               Add domain
             </Button>
           )}
-          <div className="inline-flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5">
+          <div
+            role="tablist"
+            aria-label="Knowledge views"
+            onKeyDown={onTabKeyDown}
+            className="inline-flex max-w-full flex-wrap items-center rounded-lg border border-border/60 bg-muted/40 p-0.5"
+          >
             <ModeButton
-              active={mode === "browse"}
-              onClick={() => setModeUrl("browse")}
+              {...tabProps("browse")}
               label="Browse"
               icon={<Library className="size-3.5" />}
             />
             <ModeButton
-              active={mode === "graph"}
-              onClick={() => setModeUrl("graph")}
+              {...tabProps("graph")}
               label="Graph"
               icon={<Network className="size-3.5" />}
             />
             <ModeButton
-              active={mode === "chains"}
-              onClick={() => setModeUrl("chains")}
+              {...tabProps("chains")}
               label="Chains"
               icon={<GitBranch className="size-3.5" />}
             />
             <ModeButton
-              active={mode === "domains"}
-              onClick={() => setModeUrl("domains")}
+              {...tabProps("domains")}
               label="Domains"
               icon={<Tags className="size-3.5" />}
             />
             <ModeButton
-              active={mode === "inbox"}
-              onClick={() => setModeUrl("inbox")}
+              {...tabProps("inbox")}
               label="Inbox"
+              {...(!contributionsQuery.data
+                ? {
+                    badge: "—",
+                    badgeLabel: "Inbox not loaded; open Inbox to load",
+                  }
+                : {})}
               icon={<GitMerge className="size-3.5" />}
-              {...(openCount > 0 ? { badge: openCount } : {})}
+              {...(openCount > 0
+                ? {
+                    badge: openCount,
+                    badgeLabel: `${openCount} open ${openCount === 1 ? "contribution" : "contributions"}`,
+                  }
+                : {})}
             />
           </div>
         </div>
       </div>
 
-      {mode === "browse" && (
-        <BrowsePanel
-          rows={knowledgeQuery.data?.items ?? []}
-          isLoading={knowledgeQuery.isLoading}
-          error={knowledgeQuery.error}
-          mode="browse"
-        />
-      )}
-      {mode === "chains" && (
-        <BrowsePanel
-          rows={(knowledgeQuery.data?.items ?? []).filter((r) =>
-            EDO_ENTRY_TYPES.has(r.entryType)
-          )}
-          isLoading={knowledgeQuery.isLoading}
-          error={knowledgeQuery.error}
-          mode="chains"
-        />
-      )}
-      {mode === "graph" && (
-        <GraphView
-          rows={knowledgeQuery.data?.items ?? []}
-          initialData={initialGraph}
-        />
-      )}
-      {mode === "domains" && (
-        <DomainsPanel
-          rows={domainsQuery.data?.domains ?? []}
-          isLoading={domainsQuery.isLoading}
-          error={domainsQuery.error}
-          onAddDomain={() => setAddDomainOpen(true)}
-        />
-      )}
-      {mode === "inbox" && (
-        <InboxPanel
-          rows={contributionsQuery.data?.contributions ?? []}
-          isLoading={contributionsQuery.isLoading}
-          error={contributionsQuery.error}
-          mergeErrorId={mergeError?.id ?? null}
-          mergeErrorReason={mergeError?.reason ?? null}
-          busyId={
-            mergeMutation.isPending ? (mergeMutation.variables ?? null) : null
-          }
-          rejectBusyId={
-            closeMutation.isPending
-              ? (closeMutation.variables?.id ?? null)
-              : null
-          }
-          onMerge={(r) => mergeMutation.mutate(r.contributionId)}
-          onReject={(id, reason) => closeMutation.mutate({ id, reason })}
-        />
-      )}
+      <div
+        role="tabpanel"
+        id="knowledge-tabpanel"
+        aria-labelledby={`knowledge-tab-${mode}`}
+        className="flex min-w-0 flex-col gap-4"
+      >
+        {mode === "browse" && <BoundedBrowse initialData={initialBrowse} />}
+        {mode === "chains" && (
+          <BrowsePanel
+            rows={(knowledgeQuery.data?.items ?? []).filter((r) =>
+              EDO_ENTRY_TYPES.has(r.entryType)
+            )}
+            isLoading={knowledgeQuery.isLoading}
+            error={knowledgeQuery.error}
+            mode="chains"
+          />
+        )}
+        {mode === "graph" && <GraphView />}
+        {mode === "domains" && (
+          <DomainsPanel
+            rows={domainsQuery.data?.domains ?? []}
+            isLoading={domainsQuery.isLoading}
+            error={domainsQuery.error}
+            onAddDomain={() => setAddDomainOpen(true)}
+          />
+        )}
+        {mode === "inbox" && (
+          <InboxPanel
+            rows={contributionsQuery.data?.contributions ?? []}
+            isLoading={contributionsQuery.isLoading}
+            error={contributionsQuery.error}
+            mergeErrorId={mergeError?.id ?? null}
+            mergeErrorReason={mergeError?.reason ?? null}
+            busyId={
+              mergeMutation.isPending ? (mergeMutation.variables ?? null) : null
+            }
+            rejectBusyId={
+              closeMutation.isPending
+                ? (closeMutation.variables?.id ?? null)
+                : null
+            }
+            onMerge={(r) => mergeMutation.mutate(r.contributionId)}
+            onReject={(id, reason) => closeMutation.mutate({ id, reason })}
+          />
+        )}
+      </div>
 
       <AddDomainSheet
         open={addDomainOpen}
@@ -315,33 +373,49 @@ export function KnowledgeDashboardView({
 }
 
 function ModeButton({
+  mode,
   active,
   onClick,
+  tabRef,
   label,
   icon,
   badge,
+  badgeLabel,
 }: {
+  readonly mode: ViewMode;
   readonly active: boolean;
   readonly onClick: () => void;
+  readonly tabRef: (el: HTMLButtonElement | null) => void;
   readonly label: string;
-  readonly icon: React.ReactNode;
-  readonly badge?: number;
+  readonly icon: ReactNode;
+  readonly badge?: number | string;
+  /** Spoken instead of the terse badge text. */
+  readonly badgeLabel?: string;
 }) {
   return (
     <button
+      ref={tabRef}
       type="button"
+      role="tab"
+      id={`knowledge-tab-${mode}`}
+      aria-selected={active}
+      aria-controls="knowledge-tabpanel"
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors ${
+      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
         active
           ? "bg-background font-medium text-foreground shadow-sm"
           : "text-muted-foreground hover:text-foreground"
       }`}
     >
-      {icon}
+      <span aria-hidden="true" className="contents">
+        {icon}
+      </span>
       {label}
       {badge != null && (
-        <span className="ml-0.5 inline-flex min-w-5 justify-center rounded-md bg-warning/20 px-1 font-mono text-warning text-xs">
-          {badge}
+        <span className="ml-0.5 inline-flex min-w-5 justify-center rounded-md bg-warning/20 px-1 text-amber-900 text-xs tabular-nums dark:text-warning">
+          <span aria-hidden="true">{badge}</span>
+          {badgeLabel && <span className="sr-only">, {badgeLabel}</span>}
         </span>
       )}
     </button>
@@ -367,6 +441,11 @@ function BrowsePanel({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [selected, setSelected] = useState<KnowledgeRow | null>(null);
 
+  const rowsById = useMemo(
+    () => new Map(rows.map((row) => [row.id, row])),
+    [rows]
+  );
+
   const table = useReactTable({
     data: rows,
     columns: knowledgeColumns,
@@ -383,7 +462,8 @@ function BrowsePanel({
     getFacetedUniqueValues: getFacetedUniqueValues(),
     globalFilterFn: (row, _id, filterValue: string) => {
       const q = filterValue.toLowerCase();
-      const d = row.original;
+      const d = rowsById.get(row.original.id);
+      if (!d) return false;
       return (
         d.id.toLowerCase().includes(q) ||
         d.title.toLowerCase().includes(q) ||
@@ -421,7 +501,7 @@ function BrowsePanel({
           recordCount={rows.length}
           isLoading={isLoading}
           loadingMode="skeleton"
-          onRowClick={(row) => setSelected(row)}
+          onRowClick={(row) => setSelected(rowsById.get(row.id) ?? null)}
           tableLayout={{
             headerSticky: true,
             headerBackground: true,
