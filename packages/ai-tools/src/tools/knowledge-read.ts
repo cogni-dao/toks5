@@ -17,14 +17,14 @@
 import { z } from "zod";
 import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
 
-import type { KnowledgeCapability } from "../capabilities/knowledge";
+import type { KnowledgeCapability, KnowledgeEntry } from "../capabilities/knowledge";
+import { REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
-export const KnowledgeReadInputSchema = z
-  .object({
+const knowledgeReadFields = {
     id: z
       .string()
       .optional()
@@ -44,10 +44,26 @@ export const KnowledgeReadInputSchema = z
       .max(50)
       .optional()
       .describe("Max results for list mode (1-50, default 20)"),
+};
+const idOrDomain = { message: "Either 'id' or 'domain' is required" };
+
+/** The input without `node`: what the model sees on a node that has no link targets. */
+export const KnowledgeReadLocalInputSchema = z
+  .object(knowledgeReadFields)
+  .refine((d) => d.id || d.domain, idOrDomain);
+
+export const KnowledgeReadInputSchema = z
+  .object({
+    ...knowledgeReadFields,
+    node: z
+      .string()
+      .regex(REMOTE_ALIAS_PATTERN)
+      .optional()
+      .describe(
+        "Alias of another node whose knowledge to read instead of this node's own. Only aliases the server lists work."
+      ),
   })
-  .refine((d) => d.id || d.domain, {
-    message: "Either 'id' or 'domain' is required",
-  });
+  .refine((d) => d.id || d.domain, idOrDomain);
 export type KnowledgeReadInput = z.infer<typeof KnowledgeReadInputSchema>;
 
 export const KnowledgeReadEntrySchema = KnowledgeRowSchema.extend({
@@ -67,6 +83,11 @@ export type KnowledgeReadRedacted = KnowledgeReadOutput;
 
 export const KNOWLEDGE_READ_NAME = "core__knowledge_read" as const;
 
+const KNOWLEDGE_READ_DESCRIPTION =
+  "Read knowledge entries from the node's knowledge store. " +
+  "Use with 'id' to get a specific entry, or 'domain' to list entries (optionally filtered by tags). " +
+  "Each entry includes a confidence score (0-100): 30=draft, 80=verified, 95+=hardened. ";
+
 export const knowledgeReadContract: ToolContract<
   typeof KNOWLEDGE_READ_NAME,
   KnowledgeReadInput,
@@ -74,10 +95,7 @@ export const knowledgeReadContract: ToolContract<
   KnowledgeReadRedacted
 > = {
   name: KNOWLEDGE_READ_NAME,
-  description:
-    "Read knowledge entries from the node's knowledge store. " +
-    "Use with 'id' to get a specific entry, or 'domain' to list entries (optionally filtered by tags). " +
-    "Each entry includes a confidence score (0-100): 30=draft, 80=verified, 95+=hardened.",
+  description: `${KNOWLEDGE_READ_DESCRIPTION}Pass 'node' (a configured node alias) to read that node's knowledge instead.`,
   effect: "read_only",
   inputSchema: KnowledgeReadInputSchema,
   outputSchema: KnowledgeReadOutputSchema,
@@ -90,6 +108,8 @@ export const knowledgeReadContract: ToolContract<
 export interface KnowledgeReadDeps {
   knowledgeCapability: KnowledgeCapability;
   readonly nodePublicOrigin?: string | undefined;
+  /** Reads another node's knowledge when the call names an alias. Absent = the `node` argument is refused. */
+  readonly remoteKnowledge?: RemoteKnowledgeCapability | undefined;
 }
 
 export function createKnowledgeReadImplementation(
@@ -97,6 +117,7 @@ export function createKnowledgeReadImplementation(
 ): ToolImplementation<KnowledgeReadInput, KnowledgeReadOutput> {
   return {
     execute: async (input) => {
+      if (input.node !== undefined) return executeRemote(deps, input.node, input);
       if (input.id) {
         const entry = await deps.knowledgeCapability.get(input.id);
         return {
@@ -128,6 +149,30 @@ export function createKnowledgeReadImplementation(
   };
 }
 
+/** The same two modes against another node, with provenance from that node's configured origin. A missing or unknown alias is refused with a fixed message. */
+async function executeRemote(
+  deps: KnowledgeReadDeps,
+  alias: string,
+  input: KnowledgeReadInput
+): Promise<KnowledgeReadOutput> {
+  const remote = deps.remoteKnowledge;
+  const origin = remote?.originOf(alias);
+  if (!remote || origin === undefined) throw new RemoteKnowledgeError("unknown_alias", null);
+  const withProvenance = (e: KnowledgeEntry) => ({
+    ...withoutSourceProvenance(e),
+    ...readSourceProvenance(origin, "knowledge", e.id),
+  });
+  if (input.id) {
+    const entry = await remote.get(alias, input.id);
+    return { mode: "get" as const, entries: entry ? [withProvenance(entry)] : [], totalFound: entry ? 1 : 0 };
+  }
+  const limit = input.limit ?? 20;
+  let entries = await remote.list(alias, { domain: input.domain ?? "", limit });
+  const tags = input.tags;
+  if (tags && tags.length > 0) entries = entries.filter((e) => tags.every((t) => e.tags?.includes(t)));
+  return { mode: "list" as const, entries: entries.map(withProvenance), totalFound: entries.length };
+}
+
 export const knowledgeReadStubImplementation: ToolImplementation<
   KnowledgeReadInput,
   KnowledgeReadOutput
@@ -150,3 +195,16 @@ export const knowledgeReadBoundTool: BoundTool<
   contract: knowledgeReadContract,
   implementation: knowledgeReadStubImplementation,
 };
+
+/**
+ * The same tool without the `node` argument, for a node with no link targets: the argument is advertised to the model only when it can work. The implementation is the same and
+ * refuses an alias with no remote capability, so a model that sends `node` anyway (the schema strips it) reads this node's own store.
+ */
+export const knowledgeReadLocalBoundTool = {
+  contract: {
+    ...knowledgeReadContract,
+    description: KNOWLEDGE_READ_DESCRIPTION.trimEnd(),
+    inputSchema: KnowledgeReadLocalInputSchema,
+  },
+  implementation: knowledgeReadStubImplementation,
+} as unknown as typeof knowledgeReadBoundTool;
