@@ -14,10 +14,14 @@
  *   - BACK_IS_FREE: a move to needs_triage, to an earlier stage on the path, or to cancelled is allowed (the patch carries a
  *     reason like every patch). To change path an item goes back to triage.
  *   - TERMINAL_STAYS_TERMINAL: `done` and `cancelled` have no exits.
- *   - LEGACY_IS_NEVER_ENTERED: `blocked` and `needs_closeout` are read, never entered; from them only back to triage or cancel.
- *   - ONE_PATH: triage decides the route (research, design or implement); the item kind decides the rest: a story goes
- *     implement -> validation -> done, an inbox deliverable skips validation, everything else is review -> validation ->
- *     merge -> done. A migrated item with no triage artifact takes its route from its stage.
+ *   - LEGACY_IS_NEVER_ENTERED: `blocked` is read, never entered; from it only back to triage or cancel.
+ *   - CLOSEOUT_IS_A_STAGE: `needs_closeout` follows the merge (a story: the validation) and precedes done. The checks that
+ *     once guarded the move into done (the PR merged at the approved head plus the latest PASS validation; a story's
+ *     origin-pinned PASS) now guard the move into needs_closeout; the move to done needs the latest `closeout` artifact
+ *     (verdict `done`, written since the item entered needs_closeout).
+ *   - ONE_PATH: triage decides the route (research or design; a stored legacy `implement` still holds); the item kind decides the rest: a story goes
+ *     implement -> validation -> closeout -> done, an inbox deliverable skips validation (review -> merge -> closeout ->
+ *     done), everything else is review -> validation -> merge -> closeout -> done. A spike's research -> done is unchanged. A migrated item with no triage artifact takes its route from its stage.
  *   - APPROVED_HEAD: the approved head is the head of the latest implementation_review, which must be `approve`; a later
  *     request_changes voids it. Validation and merge must be at that head, and a code item's merge also needs the latest
  *     validation, PASS-grade, at that head and written after the approval.
@@ -36,6 +40,7 @@ import {
   isOwnOrigin,
   isPassGrade,
   parseArtifactSubject,
+  type TRIAGE_VERDICTS,
   type WorkItemArtifact,
 } from "./artifacts.js";
 import { isLegacyStatus, statusRank } from "./transitions.js";
@@ -67,11 +72,6 @@ export interface PrFacts {
   /** The PR's current head commit (40 hex). */
   readonly head: string;
   readonly merged: boolean;
-  /**
-   * Whether the PR is still open. `false` with `merged: false` is a PR closed without merging. Absent reads as open (a port
-   * that cannot tell); the cutover places a closed unmerged PR in needs_implement, an open one in implementation review.
-   */
-  readonly open?: boolean | undefined;
 }
 
 /** The facts a gate reads about an inbox (a knowledge contribution) of this node's hub. */
@@ -79,8 +79,6 @@ export interface InboxFacts {
   /** The inbox's current head commit. `null` while it has none. */
   readonly head: string | null;
   readonly merged: boolean;
-  /** Whether the inbox is still open. `false` with `merged: false` is an inbox closed without merging. Absent reads as open. */
-  readonly open?: boolean | undefined;
 }
 
 /**
@@ -113,8 +111,7 @@ export const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
  * `WORK_ITEMS_PR_REPO` as the gate takes it: one or more comma-separated `owner/repo`. The well-formed entries pin the
  * repositories whose pull requests are code deliverables; a malformed entry is ignored and reported, never pinned. No
  * well-formed entry leaves it unpinned (the gate accepts a PR of any github.com repo) with the reason, so the caller can
- * warn once; it never fails boot and never becomes a default repository. The one reader of the pin, for the app and the
- * placement script alike.
+ * warn once; it never fails boot and never becomes a default repository. The one reader of the pin.
  */
 export function resolvePrRepoPin(value: string | undefined): {
   readonly repos: readonly string[];
@@ -191,6 +188,7 @@ export interface GateFacts {
 /** What the move found missing: an artifact kind or the fact that was not true. */
 export type GateMissing =
   | GateArtifactKind
+  | "closeout"
   | "scores"
   | "goal_label"
   | "moves_or_gap"
@@ -222,11 +220,15 @@ export const TRIAGE_SCORE_AXES = [
 
 type Route = "research" | "design" | "implement";
 
-const ROUTE_STAGE: Readonly<Record<string, WorkItemStatus>> = {
+/**
+ * The ladder's exits from needs_triage: one stage per triage verdict, research or design (TRIAGE_VERDICTS). There is no
+ * exit to needs_implement, so every change passes design and design review (CEO 2026-11-18).
+ */
+export const TRIAGE_ROUTE_STAGES: Readonly<Record<(typeof TRIAGE_VERDICTS)[number], WorkItemStatus>> = {
   research: "needs_research",
   design: "needs_design",
-  implement: "needs_implement",
 };
+const ROUTE_STAGE: Readonly<Record<string, WorkItemStatus>> = TRIAGE_ROUTE_STAGES;
 
 /** The latest artifact of a kind on THIS item: the highest `seq` (timestamps tie; `seq` is exact). */
 function latestOf(
@@ -258,6 +260,7 @@ function routeOf(
   artifacts: readonly GateArtifact[]
 ): Route {
   const verdict = latestOf(artifacts, "triage", item.id)?.verdict;
+  // `implement` is no longer written (TRIAGE_VERDICTS); a stored one keeps its item on the path it was triaged to.
   if (verdict === "research" || verdict === "design" || verdict === "implement")
     return verdict;
   // A migrated item with no triage artifact takes its route from its stage.
@@ -280,14 +283,22 @@ function pathOf(
     route === "design"
       ? ["needs_triage", "needs_design", "needs_design_review", "needs_implement"]
       : ["needs_triage", "needs_implement"];
-  if (item.type === "story") return [...head, "needs_validation", "done"];
+  if (item.type === "story")
+    return [...head, "needs_validation", "needs_closeout", "done"];
   if (deliverable?.kind === "inbox")
-    return [...head, "needs_implementation_review", "needs_merge", "done"];
+    return [
+      ...head,
+      "needs_implementation_review",
+      "needs_merge",
+      "needs_closeout",
+      "done",
+    ];
   return [
     ...head,
     "needs_implementation_review",
     "needs_validation",
     "needs_merge",
+    "needs_closeout",
     "done",
   ];
 }
@@ -416,7 +427,7 @@ export function evaluateMove(
 ): MoveResult {
   if (to === from) return OK;
   if (from === "done" || from === "cancelled") return unmet("terminal");
-  if (to === "blocked" || to === "needs_closeout") return unmet("path");
+  if (to === "blocked") return unmet("path");
   // BACK_IS_FREE: to triage or cancelled from any live status, including a legacy one.
   if (to === "cancelled" || to === "needs_triage") return OK;
   if (isLegacyStatus(from)) return unmet("path");
@@ -527,7 +538,7 @@ export function evaluateMove(
       if (!approved) return unmet("implementation_review");
       const head = approved.head;
       if (deliverable?.kind === "pr") {
-        // A code item is done only on a validation that still stands: the latest, PASS-grade, of this PR at the approved
+        // A code item leaves merge only on a validation that still stands: the latest, PASS-grade, of this PR at the approved
         // head, written after the approval (a later approve restarts validation). `itemRevision` cannot order it: the
         // validation was written before the item entered needs_merge.
         const validation = latestOf(artifacts, "validation", item.id);
@@ -552,6 +563,11 @@ export function evaluateMove(
         return state.merged ? OK : unmet("inbox_merged");
       }
       return unmet("pr");
+    }
+    case "needs_closeout": {
+      // The exit of closeout: the latest closeout artifact, written since the item entered it, says done.
+      const closeout = freshOf(artifacts, "closeout", item);
+      return closeout?.verdict === "done" ? OK : unmet("closeout");
     }
     default:
       return unmet("path");

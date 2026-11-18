@@ -4,8 +4,7 @@
 /**
  * Module: `@cogni/work-items/tests/adapters/doltgres-adapter-gates`
  * Purpose: Drives the move gate through DoltgresWorkItemAdapter (task.0122): the writer path refuses before it writes,
- *   every status change restamps `status_revision`, a failed PR read is a 503 that takes no lock, and the placement job is
- *   no general bypass.
+ *   every status change restamps `status_revision`, and a failed PR read is a 503 that takes no lock.
  * Scope: Fake `Sql` capturing emitted SQL. The predicate itself is in `tests/gates.test.ts`.
  * Invariants:
  *   - CREATE_IS_TRIAGE_ONLY: a create with any other status is refused before any SQL.
@@ -13,7 +12,6 @@
  *   - STATUS_REVISION: a status change sets `status_revision = revision + 1`; any other patch leaves it alone.
  *   - PR_READ_BEFORE_THE_LOCK: the PR read happens before the advisory lock; a failure is `WorkItemGateFactsUnavailableError`
  *     and nothing is locked or written; a second move within 60 s reuses the read; a failure is remembered 10 s.
- *   - PLACEMENT_IS_NARROW: `place` moves only an item still in needs_merge, needs_closeout or blocked, only to a placement stage.
  * Side-effects: none
  * @internal
  */
@@ -177,7 +175,8 @@ describe("a refused move writes nothing", () => {
     ["cancelled", "needs_triage", "terminal"],
     ["needs_implement", "blocked", "path"],
     ["needs_implement", "needs_closeout", "path"],
-    ["needs_triage", "needs_implement", "triage"],
+    ["needs_triage", "needs_implement", "path"],
+    ["needs_triage", "needs_design", "triage"],
     ["needs_implement", "needs_implementation_review", "pr"],
   ])("%s -> %s is gate_unmet (%s)", async (from, to, missing) => {
     const { queries, make } = world(from);
@@ -191,11 +190,11 @@ describe("a refused move writes nothing", () => {
   });
 
   it("a forward move on an artifact written before the item entered the stage is refused", async () => {
-    const stale = artifactRow("triage", `work:${ID}`, "implement", {
+    const stale = artifactRow("triage", `work:${ID}`, "design", {
       item_revision: STATUS_REVISION - 1,
     });
     const { queries, make } = world("needs_triage", { artifacts: [stale] });
-    await expect(patchStatus(make(), "needs_implement")).rejects.toMatchObject({
+    await expect(patchStatus(make(), "needs_design")).rejects.toMatchObject({
       name: "WorkItemGateUnmetError",
       missing: "triage",
     });
@@ -226,12 +225,12 @@ describe("a back move on the design route", () => {
 
 describe("status_revision", () => {
   it("is restamped by a forward move on its exit artifact", async () => {
-    const triage = artifactRow("triage", `work:${ID}`, "implement");
+    const triage = artifactRow("triage", `work:${ID}`, "design");
     const { queries, make } = world("needs_triage", { artifacts: [triage] });
-    const patched = await patchStatus(make(), "needs_implement");
-    expect(patched.status).toBe("needs_implement");
+    const patched = await patchStatus(make(), "needs_design");
+    expect(patched.status).toBe("needs_design");
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
-    expect(update).toContain("status = 'needs_implement'");
+    expect(update).toContain("status = 'needs_design'");
     expect(update).toContain("status_revision = revision + 1");
     expect(queries.filter((q) => q.startsWith("SELECT dolt_add"))).toEqual([
       "SELECT dolt_add('work_items')",
@@ -394,8 +393,8 @@ describe("stage lines are not events", () => {
   it("a fast write emits no stage line at info; the same lines go to debug when the logger has one", async () => {
     const info = vi.fn();
     const debug = vi.fn();
-    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "implement")] });
-    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn(), debug } }), "needs_implement");
+    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "design")] });
+    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn(), debug } }), "needs_design");
     const stage = (calls: unknown[][]) =>
       calls.filter(([fields]) => String((fields as { event?: string }).event).startsWith("adapter.work_items.stage_"));
     expect(stage(info.mock.calls)).toEqual([]);
@@ -404,8 +403,8 @@ describe("stage lines are not events", () => {
 
   it("a logger with no debug drops the fast lines and does not throw", async () => {
     const info = vi.fn();
-    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "implement")] });
-    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn() } }), "needs_implement");
+    const { make } = world("needs_triage", { artifacts: [artifactRow("triage", `work:${ID}`, "design")] });
+    await patchStatus(make({ logger: { info, warn: vi.fn(), error: vi.fn() } }), "needs_design");
     expect(info).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "adapter.work_items.stage_complete" }),
       expect.anything()
@@ -467,200 +466,6 @@ describe("deploy_verified is retired", () => {
       expect.objectContaining({ event: "adapter.work_items.deploy_verified_write", workItemId: ID }),
       expect.any(String)
     );
-  });
-});
-
-describe("placement (the one-shot cutover)", () => {
-  const INBOX = "contrib-code-work-0001";
-  const INBOX_URL = `https://node-template.cognidao.org/knowledge/inbox/${INBOX}`;
-  const merged: PrFactsPort = { read: async () => ({ head: HEAD, merged: true }) };
-  const open: PrFactsPort = { read: async () => ({ head: HEAD, merged: false, open: true }) };
-  const closed: PrFactsPort = { read: async () => ({ head: HEAD, merged: false, open: false }) };
-  const inboxState = (state: { merged: boolean; open: boolean }) => ({
-    stateOf: async () => ({ head: "c".repeat(32), ...state }),
-  });
-  const place = (adapter: DoltgresWorkItemAdapter, to: string) =>
-    adapter.place({ id: toWorkItemId(ID), to: to as never }, "system:placement");
-  const stamped = (queries: string[]) =>
-    queries.find((q) => q.startsWith("UPDATE work_items"))?.includes("status_revision = revision + 1");
-
-  it("places a needs_closeout item whose PR this store read merged in done, and restamps status_revision", async () => {
-    const { queries, make } = world("needs_closeout", { pr: PR });
-    const placed = await place(make({ prFacts: merged }), "done");
-    expect(placed.status).toBe("done");
-    expect(stamped(queries)).toBe(true);
-  });
-
-  it("plans from the facts it reads: merged, open, and closed without merging are three different placements", async () => {
-    const planFor = async (pr: string, opts: Parameters<typeof world>[1], ports: Partial<DoltgresWorkItemAdapterOptions>) => {
-      const { queries, make } = world("needs_closeout", { pr, ...opts });
-      const plan = await make(ports).planPlacement(toWorkItemId(ID));
-      expect(wrote(queries)).toBe(false);
-      return plan?.to;
-    };
-    expect(await planFor(PR, {}, { prFacts: merged })).toBe("done");
-    expect(await planFor(PR, {}, { prFacts: open })).toBe("needs_implementation_review");
-    expect(await planFor(PR, {}, { prFacts: closed })).toBe("needs_implement");
-    expect(await planFor(INBOX_URL, {}, { inboxes: inboxState({ merged: true, open: false }) })).toBe("done");
-    expect(await planFor(INBOX_URL, {}, { inboxes: inboxState({ merged: false, open: true }) })).toBe("needs_implementation_review");
-    expect(await planFor(INBOX_URL, {}, { inboxes: inboxState({ merged: false, open: false }) })).toBe("needs_implement");
-    // A port that does not say reads as open.
-    expect(await planFor(PR, {}, { prFacts: { read: async () => ({ head: HEAD, merged: false }) } })).toBe("needs_implementation_review");
-  });
-
-  it("a merged PR of a repository outside the pin is not placed in done: it is never read and nothing is written", async () => {
-    const read = vi.fn(async () => ({ head: HEAD, merged: true }));
-    const { queries, make } = world("needs_closeout", { pr: OTHER_REPO_PR });
-    const adapter = make({ prFacts: { read } });
-    expect(await adapter.planPlacement(toWorkItemId(ID))).toBeUndefined();
-    await expect(place(adapter, "done")).rejects.toBeInstanceOf(WorkItemGateUnmetError);
-    expect(read).not.toHaveBeenCalled();
-    expect(wrote(queries)).toBe(false);
-  });
-
-  it("unpinned, a merged PR of any github.com repository still places in done", async () => {
-    const { make } = world("needs_closeout", { pr: OTHER_REPO_PR });
-    const placed = await place(make({ prFacts: merged, prRepos: [] }), "done");
-    expect(placed.status).toBe("done");
-  });
-
-  it("a closed PR or closed inbox is placed in needs_implement; the open and done claims are refused", async () => {
-    for (const [pr, ports] of [
-      [PR, { prFacts: closed }],
-      [INBOX_URL, { inboxes: inboxState({ merged: false, open: false }) }],
-    ] as const) {
-      const { queries, make } = world("needs_closeout", { pr });
-      const adapter = make(ports);
-      for (const wrong of ["needs_implementation_review", "done"]) {
-        await expect(place(adapter, wrong)).rejects.toBeInstanceOf(WorkItemGateUnmetError);
-      }
-      expect(wrote(queries)).toBe(false);
-      expect((await place(adapter, "needs_implement")).status).toBe("needs_implement");
-    }
-  });
-
-  it("places an inbox the inbox port read merged in done, and an open one in implementation review", async () => {
-    const mergedInbox = world("needs_closeout", { pr: INBOX_URL });
-    expect(
-      (await place(mergedInbox.make({ inboxes: { stateOf: async () => ({ head: "c".repeat(32), merged: true }) } }), "done")).status
-    ).toBe("done");
-    const openInbox = world("needs_closeout", { pr: INBOX_URL });
-    expect(
-      (await place(openInbox.make({ inboxes: { stateOf: async () => ({ head: "c".repeat(32), merged: false }) } }), "needs_implementation_review")).status
-    ).toBe("needs_implementation_review");
-  });
-
-  it.each([
-    ["an open PR", "needs_closeout", { pr: PR }, open, "needs_implementation_review"],
-    ["a closeout item with no pr", "needs_closeout", {}, undefined, "needs_implement"],
-    ["a blocked item", "blocked", { pr: PR }, undefined, "needs_triage"],
-    ["a spike with no pr", "needs_closeout", { type: "spike" }, undefined, "needs_research"],
-  ] as const)("%s goes to %s and nowhere else", async (_name, from, opts, prFacts, to) => {
-    const { queries, make } = world(from, opts);
-    const adapter = make(prFacts ? { prFacts } : {});
-    for (const wrong of ["done", "needs_implement", "needs_research", "needs_triage", "needs_implementation_review", "needs_merge", "needs_validation", "blocked"]) {
-      if (wrong === to) continue;
-      await expect(place(adapter, wrong)).rejects.toBeInstanceOf(WorkItemGateUnmetError);
-    }
-    expect(wrote(queries)).toBe(false);
-    expect((await place(adapter, to)).status).toBe(to);
-  });
-
-  it("does not trust the caller: done on an open PR is refused even though done is a placement stage", async () => {
-    const { queries, make } = world("needs_closeout", { pr: PR });
-    await expect(place(make({ prFacts: open }), "done")).rejects.toMatchObject({
-      name: "WorkItemGateUnmetError",
-      to: "done",
-      missing: "path",
-    });
-    expect(wrote(queries)).toBe(false);
-  });
-
-  it("needs_research is for a spike only", async () => {
-    const { queries, make } = world("needs_closeout", { type: "task" });
-    await expect(place(make(), "needs_research")).rejects.toBeInstanceOf(WorkItemGateUnmetError);
-    expect(wrote(queries)).toBe(false);
-  });
-
-  it.each(["done", "needs_implementation_review", "needs_implement", "needs_research", "needs_triage"])(
-    "needs_merge is not a source: place(needs_merge -> %s) is refused and nothing is written",
-    async (to) => {
-      const { queries, make } = world("needs_merge", { pr: PR });
-      await expect(place(make({ prFacts: merged }), to)).rejects.toBeInstanceOf(WorkItemGateUnmetError);
-      expect(wrote(queries)).toBe(false);
-      expect(await make({ prFacts: merged }).planPlacement(toWorkItemId(ID))).toBeUndefined();
-    }
-  );
-
-  it("refuses every ladder stage as a source", async () => {
-    for (const from of ["needs_implement", "needs_validation", "needs_implementation_review", "done", "needs_triage"]) {
-      const { queries, make } = world(from, { pr: PR });
-      await expect(place(make({ prFacts: merged }), "done")).rejects.toBeInstanceOf(WorkItemGateUnmetError);
-      expect(wrote(queries)).toBe(false);
-    }
-  });
-
-  it("an unreadable PR is a 503 and writes nothing; no ports wired is the same", async () => {
-    const down: PrFactsPort = { read: async () => { throw new Error("github 403"); } };
-    const a = world("needs_closeout", { pr: PR });
-    await expect(place(a.make({ prFacts: down }), "done")).rejects.toBeInstanceOf(WorkItemGateFactsUnavailableError);
-    expect(wrote(a.queries)).toBe(false);
-    const b = world("needs_closeout", { pr: PR });
-    await expect(place(b.make(), "done")).rejects.toBeInstanceOf(WorkItemGateFactsUnavailableError);
-    expect(wrote(b.queries)).toBe(false);
-  });
-
-  it("a second run is a no-op: the placed item is no longer a source", async () => {
-    const { queries, make } = world("needs_closeout", { pr: PR });
-    const adapter = make({ prFacts: merged });
-    expect((await place(adapter, "done")).status).toBe("done");
-    const updates = () => queries.filter((q) => q.startsWith("UPDATE work_items")).length;
-    expect(updates()).toBe(1);
-    expect(await adapter.planPlacement(toWorkItemId(ID))).toBeUndefined();
-    await expect(place(adapter, "done")).rejects.toBeInstanceOf(WorkItemGateUnmetError);
-    expect(updates()).toBe(1);
-  });
-
-  it("a pr that changes between the plan and the lock is refused with nothing written", async () => {
-    const { queries, make, change } = world("needs_closeout", { pr: PR });
-    // The plan reads the PR merged; before the lock a writer points the item at another (unmerged) PR.
-    const racing: PrFactsPort = {
-      read: async () => {
-        change({ pr: OTHER });
-        return { head: HEAD, merged: true, open: true };
-      },
-    };
-    await expect(place(make({ prFacts: racing }), "done")).rejects.toMatchObject({
-      name: "WorkItemGateUnmetError",
-      from: "needs_closeout",
-      to: "done",
-      missing: "path",
-    });
-    expect(wrote(queries)).toBe(false);
-  });
-
-  it("a status that changes between the plan and the lock is refused with nothing written", async () => {
-    const { queries, make, change } = world("needs_closeout", { pr: PR });
-    const racing: PrFactsPort = {
-      read: async () => {
-        change({ status: "blocked" });
-        return { head: HEAD, merged: true, open: false };
-      },
-    };
-    await expect(place(make({ prFacts: racing }), "done")).rejects.toMatchObject({
-      name: "WorkItemGateUnmetError",
-      missing: "path",
-    });
-    expect(wrote(queries)).toBe(false);
-  });
-
-  it("an ordinary patch of the same move is still refused", async () => {
-    const { queries, make } = world("needs_closeout", { pr: PR });
-    await expect(patchStatus(make({ prFacts: merged }), "done")).rejects.toMatchObject({
-      name: "WorkItemGateUnmetError",
-      missing: "path",
-    });
-    expect(wrote(queries)).toBe(false);
   });
 });
 

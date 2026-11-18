@@ -140,7 +140,12 @@ async function walkCode(pr) {
 	await artifact("triage artifact (design)", X, { kind: "triage", subject: `work:${X}`, verdict: "design", note: "ladder walk" });
 	await patch("triage -> needs_design", X, "needs_design", OK, MUST);
 
-	const inbox = await call("POST", "/knowledge/contributions", {
+	// An agent cannot close an inbox and each principal may hold 10 open, so a walk reuses an open synthetic design inbox.
+	const open = await call("GET", "/knowledge/contributions?state=open&limit=50");
+	const reused = (open.json?.contributions ?? open.json?.items ?? []).find(
+		(c) => c.message === "synthetic ladder walk design" && c.headCommit,
+	);
+	const inbox = reused ? { status: 200, json: reused } : await call("POST", "/knowledge/contributions", {
 		message: "synthetic ladder walk design",
 		idempotencyKey: `ladder-walk-${stamp}`,
 		edits: [
@@ -189,7 +194,10 @@ async function walkCode(pr) {
 	await patch("validation -> merge without a validation", X, "needs_merge", unmet("validation"));
 	await artifact("validation artifact (pass)", X, { kind: "validation", subject: `${pr.url}@${pr.head}`, verdict: "pass", url: pr.url, rows: PASS_ROWS });
 	await patch("needs_validation -> needs_merge", X, "needs_merge", OK, MUST);
-	await patch("needs_merge -> done (the pr is merged)", X, "done", OK, MUST);
+	await patch("needs_merge -> needs_closeout (the pr is merged)", X, "needs_closeout", OK, MUST);
+	await patch("closeout -> done without a closeout artifact", X, "done", unmet("closeout"));
+	await artifact("closeout artifact (done)", X, { kind: "closeout", subject: `work:${X}`, verdict: "done", note: "ladder walk: synthetic, no KPI reading", body: "ladder walk closeout" });
+	await patch("needs_closeout -> done", X, "done", OK, MUST);
 	live.delete(X); // terminal: it stays, labelled synthetic
 	await patch("done is terminal", X, "needs_triage", unmet("terminal"));
 }
@@ -197,10 +205,11 @@ async function walkCode(pr) {
 async function walkBack() {
 	const Y = await create("back-move", "Synthetic ladder walk: back is free, a stale triage is not enough.");
 	console.log(`item ${Y}`);
-	await artifact("triage artifact (implement)", Y, { kind: "triage", subject: `work:${Y}`, verdict: "implement", note: "ladder walk" });
-	await patch("triage -> needs_implement", Y, "needs_implement", OK, MUST);
-	await patch("back needs_implement -> needs_triage", Y, "needs_triage", OK, MUST);
-	await patch("triage -> implement on the stale triage", Y, "needs_implement", unmet("triage"));
+	await step("triage straight to implement is refused", "POST", `/work/items/${Y}/artifacts`, { kind: "triage", subject: `work:${Y}`, verdict: "implement", note: "ladder walk" }, { status: 400 });
+	await artifact("triage artifact (design)", Y, { kind: "triage", subject: `work:${Y}`, verdict: "design", note: "ladder walk" });
+	await patch("triage -> needs_design", Y, "needs_design", OK, MUST);
+	await patch("back needs_design -> needs_triage", Y, "needs_triage", OK, MUST);
+	await patch("triage -> design on the stale triage", Y, "needs_design", unmet("triage"));
 }
 
 /** Every synthetic item still live is cancelled, whatever happened above. */
