@@ -1,50 +1,60 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@app/api/v1/knowledge/domains/[domain]/route`
- * Purpose: Expose domain read, partial update and empty-domain deletion on Toks5.
- * Scope: Thin node-owned delivery adapter; delegates storage to the released knowledge-store port.
- * Invariants: All verbs use the same authenticated-principal permission as collection POST.
- * Side-effects: HTTP responses and delegated Dolt reads/writes.
- * Links: packages/node-contracts/src/knowledge.domains.v1.contract.ts
+ * Purpose: HTTP endpoints for one knowledge domain — GET read, PATCH name/description, DELETE if empty.
+ * Scope: GET needs a signed-in human or a bearer agent holding the knowledge:read role (sameDoor `knowledge.read`); PATCH and DELETE need a signed-in human (a bearer agent is 403 `bearer_write_undeclared`). Does not contain business logic; delegates to ../_handlers.ts and the container's KnowledgeStorePort.
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, DOMAIN_READ_NEEDS_GRANT,
+ *   DOMAIN_MUTATION_HUMAN_ONLY, DOMAIN_ID_IS_IMMUTABLE, DOMAIN_DELETE_REFUSES_NONEMPTY.
+ *   PUT is not supported (405): PATCH is the partial update.
+ * Side-effects: IO (HTTP response, Doltgres read/write via container port; one Dolt commit per mutation)
+ * Links: contracts/knowledge.domains.v1.contract, hub `knowledge-domain-crud-design`
  * @public
  */
+
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { handleDelete, handleGet, handleUpdate } from "../_handlers";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-type DomainContext = { params: Promise<{ domain: string }> };
 
-export const GET = wrapRouteHandlerWithLogging<DomainContext>(
+type DomainRouteContext = { params: Promise<{ domain: string }> };
+
+export const GET = wrapRouteHandlerWithLogging<DomainRouteContext>(
   {
     routeId: "knowledge.domains.get",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
-  async (_ctx, _request, user, context) => {
+  async (_ctx, _request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
-    return handleGet((await context.params).domain, user);
+    const { domain } = await context.params;
+    return handleGet(domain, sessionUser);
   }
 );
-export const PATCH = wrapRouteHandlerWithLogging<DomainContext>(
+
+export const PATCH = wrapRouteHandlerWithLogging<DomainRouteContext>(
   {
     routeId: "knowledge.domains.update",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, request, user, context) => {
+  async (ctx, request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
-    return handleUpdate(request, (await context.params).domain, user, ctx.log);
+    const { domain } = await context.params;
+    return handleUpdate(request, domain, sessionUser, ctx.log);
   }
 );
-export const DELETE = wrapRouteHandlerWithLogging<DomainContext>(
+
+export const DELETE = wrapRouteHandlerWithLogging<DomainRouteContext>(
   {
     routeId: "knowledge.domains.delete",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, _request, user, context) => {
+  async (ctx, _request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
-    return handleDelete((await context.params).domain, user, ctx.log);
+    const { domain } = await context.params;
+    return handleDelete(domain, sessionUser, ctx.log);
   }
 );

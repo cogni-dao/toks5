@@ -39,8 +39,8 @@ REST API routes for schedule CRUD operations. Auth-protected endpoints for creat
 - **Routes:**
   - `POST /api/v1/schedules` — create schedule (returns 201)
   - `GET /api/v1/schedules` — list user's schedules
-  - `GET /api/v1/schedules/[scheduleId]` — owned detail
-  - `GET /api/v1/schedules/[scheduleId]/runs` — bounded metadata history through the shared package
+  - `GET /api/v1/schedules/[scheduleId]` — read owned configuration
+  - `GET /api/v1/schedules/[scheduleId]/runs` — paginated owned history
   - `PATCH /api/v1/schedules/[scheduleId]` — update schedule
   - `DELETE /api/v1/schedules/[scheduleId]` — delete schedule (returns 204)
 - **Files considered API:** route.ts, [scheduleId]/route.ts
@@ -59,7 +59,7 @@ REST API routes for schedule CRUD operations. Auth-protected endpoints for creat
 
 ```bash
 # Create schedule
-curl -X POST /api/v1/schedules -d '{"graphId":"langgraph:poet","cron":"0 9 * * *","timezone":"UTC","input":{}}'
+curl -X POST /api/v1/schedules -d '{"graphId":"langgraph:cogni","cron":"0 9 * * *","timezone":"UTC","input":{}}'
 
 # List schedules
 curl /api/v1/schedules

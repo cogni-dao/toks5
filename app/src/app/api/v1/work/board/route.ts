@@ -4,7 +4,7 @@
 /**
  * Module: `@app/api/v1/work/board/route`
  * Purpose: HTTP endpoint for the work board's first page of every visible status column.
- * Scope: Auth-protected GET. Node-local parts are auth, logging and the facade; decode, the budgeted column reads, output validation and error mapping are the published `handleWorkBoardRequest` (node-template task.0055, adopted task.0056).
+ * Scope: Auth-protected GET. Node-local parts are auth, logging and the facade; decode, the budgeted column reads, output validation and error mapping are the published `handleWorkBoardRequest` (task.0055).
  * Invariants:
  *   - VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL.
  *   - ONE_CODEC: decoded by `parseWorkBoardSearchParams` (the summary query codec plus required `statuses`), encoded with `WorkBoardColumnsSchema`.
@@ -13,7 +13,7 @@
  *   - TYPED_ERRORS: invalid input or cursor → 400; backend unavailable or busy, including held native capacity (`WorkItemsCapacityError`) → 503; anything else → 500.
  * Observability: the completion event carries `durationMs` (whole request), `columnCount`, `queryCount` (1 for a composed board), `readMode` (`composed` | `sequential`), `notStartedCount`, `columnDurationsMs` (one entry per read, in order) and `rowsScanned`.
  * Side-effects: IO (HTTP response, Doltgres read via the facade)
- * Links: task.0056, @cogni/work-items read-handlers (handleWorkBoardRequest / handleWorkSummariesRequest), ../summaries/route.ts
+ * Links: task.0055, packages/work-items/src/read-handlers.ts, ../summaries/route.ts
  * @public
  */
 

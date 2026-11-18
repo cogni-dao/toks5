@@ -28,6 +28,11 @@
  *   Temporal uses Context.current().cancellationSignal for activity cancellation
  */
 export interface ExecutionContext {
+  /**
+   * Host-verified: no caller waits on this run (a validated schedule tick). It only lets a run with no
+   * usable write tool end without a model call; it never grants or removes a tool.
+   */
+  readonly unattended?: boolean;
   /** Actor who initiated this run (user ID for user-initiated, undefined for system) */
   readonly actorUserId?: string;
   /** Session ID for observability grouping (e.g., Langfuse sessions) */

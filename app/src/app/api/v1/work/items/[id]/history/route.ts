@@ -3,11 +3,11 @@
 
 /**
  * Module: `@app/api/v1/work/items/[id]/history`
- * Purpose: GET a work item's versions, newest first, each with its change reason (story.0023).
- * Scope: Thin route: session check, id, `readWorkItemHistory` from `@cogni/work-items`, one log event, response. Holds no history logic.
+ * Purpose: GET a work item's versions, newest first, each with its change reason (task.0052).
+ * Scope: Thin route: session check, id, `readWorkItemHistory` from `@cogni/work-items`, one log event, response.
  * Invariants: NOTE_NOT_BODY, ONE_HISTORY_SHAPE, one terminal log event per read (counts only).
  * Side-effects: IO (HTTP response, Doltgres read)
- * Links: hub change-history-design, change-history-fleet-adoption
+ * Links: @cogni-dao/work-items readWorkItemHistory, hub change-history-design
  * @public
  */
 
@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,18 +37,13 @@ export const GET = wrapRouteHandlerWithLogging<{
       getContainer().doltgresWorkItems,
       id
     );
-    const { event, errorName, ...fields } = log;
-    // The package owns the event name; the node registers none.
-    ctx.log.info(
-      {
-        event,
-        reqId: ctx.reqId,
-        routeId: ctx.routeId,
-        ...fields,
-        durationMs: Date.now() - startedAt,
-      },
-      event
-    );
+    const { event: _event, errorName, ...fields } = log;
+    logEvent(ctx.log, EVENT_NAMES.WORK_ITEMS_HISTORY_READ, {
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      ...fields,
+      durationMs: Date.now() - startedAt,
+    });
     if (errorName !== undefined) {
       ctx.log.warn({ errorName }, "work.items.history_unavailable");
     }

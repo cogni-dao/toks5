@@ -103,6 +103,13 @@ export const serverSchema = z.object({
     .min(1)
     .max(Number.MAX_SAFE_INTEGER)
     .default(1),
+  // Governance sync reserves one connection while querying through the same pool.
+  DB_SERVICE_POOL_MAX: z.coerce
+    .number()
+    .int()
+    .min(2)
+    .max(Number.MAX_SAFE_INTEGER)
+    .default(2),
 
   // NextAuth secret (required for JWT signing)
   AUTH_SECRET: z.string().min(32),
@@ -143,8 +150,8 @@ export const serverSchema = z.object({
   // Required when on-chain governance signal execution is enabled.
   ALCHEMY_WEBHOOK_SECRET: optionalString,
 
-  // GitHub Review App credentials - for PR review Check Runs + comments.
-  // Optional: PR review feature is disabled when not configured.
+  // GitHub App credentials - used by governance signal dispatch (Alchemy webhook).
+  // Optional: signal dispatch is skipped when not configured.
   // These are the same env vars used by scheduler-worker for ingestion.
   GH_REVIEW_APP_ID: optionalString,
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: optionalString,
@@ -183,6 +190,8 @@ export const serverSchema = z.object({
   // When set, graph execution uses langgraph dev server instead of in-process
   // Per LANGGRAPH_SERVER.md MVP: default port 2024 for langgraph dev
   LANGGRAPH_DEV_URL: z.string().url().optional(),
+  // Local stack keeps Studio running while exercising the billed in-process executor.
+  COGNI_LOCAL_INPROC: z.enum(["true", "false"]).optional(),
 
   // Doltgres (Knowledge Data Plane) - Optional
   // Per knowledge-data-plane spec: versioned knowledge store for agent domain expertise.
@@ -238,6 +247,11 @@ export const serverSchema = z.object({
   COGNI_REPO_PATH: optionalString,
   // SHA override for mounts without .git (e.g., git-sync worktree)
   COGNI_REPO_SHA: optionalString,
+  // owner/repo of this node's repository: only a pull request there is a code deliverable of a work item (task.0122).
+  // Optional: one or more comma-separated owner/repo; when set, only a pull request of those repositories is a code
+  // deliverable. Unset, the gate accepts a PR of any
+  // github.com repository and the container logs `adapter.work_items.pr_repo_unpinned` once at boot. No default.
+  WORK_ITEMS_PR_REPO: optionalString,
 
   // TigerBeetle (Financial Ledger) - Optional
   // Required only when double-entry ledger is enabled.

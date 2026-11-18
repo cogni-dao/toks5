@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Red-owned schedule detail and paged history; shared package supplies row labels. */
+/**
+ * Module: app/schedules/[scheduleId]/view
+ * Purpose: Inspect schedule configuration and execution history; open existing chat threads.
+ * Scope: Read UI with pause/resume controls; no execution side effects.
+ * Invariants: One row per run; nullable locators stay unavailable; runtime status is not task success.
+ * Side-effects: IO (schedule reads and explicit management mutations)
+ * Links: https://cognidao.org/work/items/task.5353
+ * @public
+ */
 "use client";
 import { presentScheduleRun } from "@cogni/scheduling/presentation";
 import {
@@ -21,59 +29,55 @@ import {
   TableHeader,
   TableRow,
 } from "@/components";
-import { readSchedule, readScheduleRuns } from "../_api/readSchedule";
+import { fetchSchedule, fetchScheduleHistory } from "../_api/readHistory";
 import { updateSchedule } from "../_api/updateSchedule";
+import { schedulePrompt } from "../presentation";
 
-export function ScheduleHistoryView({ scheduleId }: { scheduleId: string }) {
+export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
   const client = useQueryClient();
-  const detail = useQuery({
+  const schedule = useQuery({
     queryKey: ["schedule", scheduleId],
-    queryFn: () => readSchedule(scheduleId),
+    queryFn: () => fetchSchedule(scheduleId),
+    staleTime: 30_000,
   });
   const history = useInfiniteQuery({
-    queryKey: ["schedule-runs", scheduleId],
-    queryFn: ({ pageParam }) => readScheduleRuns(scheduleId, pageParam),
-    initialPageParam: undefined as string | undefined,
+    queryKey: ["schedule-history", scheduleId],
+    queryFn: ({ pageParam }) => fetchScheduleHistory(scheduleId, pageParam),
+    initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
-    enabled: detail.isSuccess,
-    refetchInterval: 15_000,
+    enabled: !!schedule.data,
+    staleTime: 30_000,
   });
   const toggle = useMutation({
     mutationFn: updateSchedule,
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ["schedule", scheduleId] });
+    onSuccess: (updated) => {
+      client.setQueryData(["schedule", updated.id], updated);
       void client.invalidateQueries({ queryKey: ["schedules"] });
     },
   });
-  const schedule = detail.data;
+  const refresh = () => {
+    void history.refetch();
+    void schedule.refetch();
+  };
+  const current = schedule.data;
   const runs = history.data?.pages.flatMap((page) => page.runs) ?? [];
-  if (!schedule)
+  if (!current)
     return (
       <div className="p-6">
         <Link href="/schedules" className="text-sm underline">
           All schedules
         </Link>
-        <p role={detail.isError ? "alert" : "status"} className="my-4">
-          {detail.error?.message ?? "Loading schedule…"}
+        <p role={schedule.isError ? "alert" : "status"} className="my-4">
+          {schedule.error?.message ?? "Loading schedule…"}
         </p>
-        {detail.isError && (
-          <Button variant="outline" onClick={() => void detail.refetch()}>
+        {schedule.isError && (
+          <Button variant="outline" onClick={() => void schedule.refetch()}>
             Try again
           </Button>
         )}
       </div>
     );
-  const messages = Array.isArray(schedule.input.messages)
-    ? schedule.input.messages
-    : [];
-  const prompt = messages
-    .map((message) =>
-      message && typeof message === "object" && "content" in message
-        ? String(message.content)
-        : ""
-    )
-    .filter(Boolean)
-    .join("\n\n");
+  const prompt = schedulePrompt(current.input);
   return (
     <main className="mx-auto w-full min-w-0 max-w-5xl space-y-6 p-4 md:p-6">
       <Link
@@ -83,36 +87,51 @@ export function ScheduleHistoryView({ scheduleId }: { scheduleId: string }) {
         ← All schedules
       </Link>
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 break-words">
           <h1 className="font-semibold text-2xl">
-            {schedule.graphId.split(":").pop() ?? schedule.graphId}
+            {current.graphId.split(":").pop() ?? current.graphId}
           </h1>
           <p className="mt-2 text-muted-foreground text-sm">
-            {schedule.cron} · {schedule.timezone}
+            {current.cron} · {current.timezone}
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Badge intent={schedule.enabled ? "default" : "secondary"}>
-            {schedule.enabled ? "Active" : "Paused"}
+          <Badge intent={current.enabled ? "default" : "secondary"}>
+            {current.enabled ? "Active" : "Paused"}
           </Badge>
           <Button
             variant="outline"
-            disabled={toggle.isPending}
-            onClick={() =>
+            disabled={toggle.isPending || schedule.isError}
+            onClick={() => {
+              if (schedule.isError) return;
               toggle.mutate({
                 id: scheduleId,
-                data: { enabled: !schedule.enabled },
-              })
-            }
+                data: { enabled: !current.enabled },
+              });
+            }}
           >
             {toggle.isPending
               ? "Saving…"
-              : schedule.enabled
+              : current.enabled
                 ? "Pause"
                 : "Resume"}
           </Button>
         </div>
       </div>
+      {schedule.isError && (
+        <div role="alert" className="text-sm">
+          <p>Unable to refresh schedule. Showing previously loaded details.</p>
+          <p className="text-destructive">{schedule.error.message}</p>
+          <Button
+            variant="outline"
+            className="mt-2"
+            disabled={schedule.isFetching}
+            onClick={() => void schedule.refetch()}
+          >
+            Try again
+          </Button>
+        </div>
+      )}
       {toggle.isError && (
         <p role="alert" className="text-destructive text-sm">
           {toggle.error.message}
@@ -130,7 +149,7 @@ export function ScheduleHistoryView({ scheduleId }: { scheduleId: string }) {
           <Button
             variant="ghost"
             disabled={history.isFetching}
-            onClick={() => void history.refetch()}
+            onClick={() => refresh()}
           >
             Refresh
           </Button>
@@ -138,13 +157,13 @@ export function ScheduleHistoryView({ scheduleId }: { scheduleId: string }) {
         {history.isError && (
           <div role="alert" className="mb-3 text-sm">
             <p>{history.error.message}</p>
-            <Button variant="outline" onClick={() => void history.refetch()}>
+            <Button variant="outline" onClick={() => refresh()}>
               Try again
             </Button>
           </div>
         )}
         {history.isPending ? (
-          <p role="status">Loading history…</p>
+          <output>Loading history…</output>
         ) : !runs.length && !history.isError ? (
           <p className="py-8 text-center text-muted-foreground">No runs yet</p>
         ) : runs.length > 0 ? (
@@ -161,7 +180,7 @@ export function ScheduleHistoryView({ scheduleId }: { scheduleId: string }) {
               <TableBody>
                 {runs.map((run) => {
                   const row = presentScheduleRun(run, {
-                    timezone: schedule.timezone,
+                    timezone: current.timezone,
                   });
                   return (
                     <TableRow key={row.id}>

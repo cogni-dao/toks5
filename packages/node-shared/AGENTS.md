@@ -36,6 +36,7 @@ Shared pure utilities, constants, observability helpers, and domain types for al
 
 ## Public Surface
 
+- Browser consumers resolve `src/browser.ts` through the package's `browser` export condition. Keep Node crypto and request-local auth out of that runtime dependency graph; the server entry retains the full API.
 - **Exports (via `src/index.ts`):**
   - **AI:** content scrubbing, prompt hashing, citation guard, tool catalog
   - **Analytics:** PostHog capture helper, event name registry
@@ -44,7 +45,7 @@ Shared pure utilities, constants, observability helpers, and domain types for al
   - **Constants:** `COGNI_SYSTEM_BILLING_ACCOUNT_ID`, `COGNI_SYSTEM_PRINCIPAL_USER_ID`, payment constants
   - **Crypto:** `aeadEncrypt`, `aeadDecrypt` (AES-256-GCM)
   - **Errors:** `ChatValidationError`, `toUiError`
-  - **Observability:** `EVENT_NAMES`, `logEvent`, `logRequestStart/End/Warn/Error`, `createRequestContext`, `clientLogger`, event payload types
+  - **Observability:** `EVENT_NAMES`, `logEvent`, `logRequestStart/End/Warn/Error`, `createRequestContext`, `clientLogger`, event payload types; `AI_THREAD_READ`, `SCHEDULE_DETAIL_READ`, `SCHEDULE_HISTORY_READ`, `WORK_ITEMS_LIST_COMPLETE` terminal read events and `WORK_ITEMS_LIST_ERROR_CODES`
   - **Schemas:** LiteLLM spend-log Zod schemas
   - **Time:** `deriveTimeRange`, `TIME_RANGE_PRESETS`
   - **Util:** `isValidUuid`, `deriveAccountIdFromApiKey`
@@ -75,4 +76,4 @@ pnpm --filter @cogni/node-shared build
 - App-local files remain in each app's `src/shared/`: env, db, hooks, config server, model-catalog, wagmi, evm-wagmi, onchain, logger, metrics, redact, cn
 - Mixed barrels (`@/shared/observability`, `@/shared/web3`, `@/shared/util`) re-export from both local files and `@cogni/node-shared`
 
-Owned schedule detail/history and saved-thread reads use registered metadata-only events (`SCHEDULE_DETAIL_READ`, `SCHEDULE_HISTORY_READ`, `AI_THREAD_READ`) with request identity and terminal outcome.
+The /browser subpath exports pure web3, money, event and request-context helpers without Node request storage, scheduler tokens or Node crypto. Browser consumers use this entrypoint.

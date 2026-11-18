@@ -12,7 +12,6 @@ type WorkRouter = {
 interface WorkListState {
   readonly type: readonly string[];
   readonly status: readonly string[];
-  readonly project: readonly string[];
   readonly sort: string | null;
   readonly query: string;
   readonly rankRange?: readonly [number | undefined, number | undefined];
@@ -25,7 +24,7 @@ export function workListHref(searchParams: SerializableSearchParams): string {
 
 export function workItemHref(
   id: string,
-  searchParams: SerializableSearchParams
+  searchParams: SerializableSearchParams,
 ): string {
   const query = searchParams.toString();
   const path = `/work/items/${encodeURIComponent(id)}`;
@@ -35,7 +34,7 @@ export function workItemHref(
 function setListParam(
   params: URLSearchParams,
   key: string,
-  values: readonly string[]
+  values: readonly string[],
 ): void {
   params.delete(key);
   if (values.length > 0) params.set(key, values.join(","));
@@ -45,13 +44,15 @@ function setListParam(
 export function workViewHref(
   selectedItemId: string | undefined,
   searchParams: SerializableSearchParams,
-  state: WorkListState
+  state: WorkListState,
 ): string {
   const params = new URLSearchParams(searchParams.toString());
+  params.delete("cursor");
   setListParam(params, "type", state.type);
   setListParam(params, "status", state.status);
   if (state.status.length === 0) params.set("status", "all");
-  setListParam(params, "project", state.project);
+  // The Project filter was replaced by the Goal column (task.0112); an old link's value is dropped on the next edit.
+  params.delete("project");
   params.delete("sort");
   if (state.sort) params.set("sort", state.sort);
   params.delete("q");
@@ -70,14 +71,14 @@ export function workViewHref(
 export function openWorkItemPermalink(
   router: WorkRouter,
   id: string,
-  searchParams: SerializableSearchParams
+  searchParams: SerializableSearchParams,
 ): void {
   router.push(workItemHref(id, searchParams), { scroll: false });
 }
 
 export function closeWorkItemPermalink(
   router: WorkRouter,
-  searchParams: SerializableSearchParams
+  searchParams: SerializableSearchParams,
 ): void {
   router.replace(workListHref(searchParams), { scroll: false });
 }

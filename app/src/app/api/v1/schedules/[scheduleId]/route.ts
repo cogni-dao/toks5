@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/schedules/[scheduleId]`
- * Purpose: HTTP endpoints for single schedule operations (detail, update, delete).
+ * Purpose: HTTP endpoints for single schedule detail and management operations.
  * Scope: Auth-protected GET/PATCH/DELETE endpoints for schedule management. Does not contain business logic.
  * Invariants:
  *   - Schedule ownership enforced (callerUserId must match ownerUserId)
@@ -16,9 +16,9 @@
 import { toUserId } from "@cogni/ids";
 import {
   ScheduleResponseSchema,
+  schedulesGetOperation,
   schedulesUpdateOperation,
 } from "@cogni/node-contracts";
-import { schedulesGetOperation } from "@cogni/scheduling";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -127,54 +127,17 @@ function handleRouteError(
   return null;
 }
 
-/** GET owned schedule configuration; unknown and foreign IDs both return 404. */
-export const GET = wrapRouteHandlerWithLogging<{
-  params: Promise<{ scheduleId: string }>;
-}>(
-  { routeId: "schedules.detail", auth: { mode: "required", getSessionUser } },
-  async (ctx, _request, sessionUser, context) => {
-    const startedAt = performance.now();
-    if (!context) throw new Error("Route context required");
-    const parsed = schedulesGetOperation.input.safeParse(await context.params);
-    if (!parsed.success)
-      return invalidScheduleRead(
-        ctx,
-        EVENT_NAMES.SCHEDULE_DETAIL_READ,
-        startedAt
-      );
-    try {
-      const schedule = await scheduleReadback().schedule(
-        sessionUser.id,
-        parsed.data.scheduleId
-      );
-      const response = schedulesGetOperation.output.parse(toResponse(schedule));
-      logEvent(ctx.log, EVENT_NAMES.SCHEDULE_DETAIL_READ, {
-        reqId: ctx.reqId,
-        routeId: ctx.routeId,
-        status: 200,
-        outcome: "success",
-        scheduleId: schedule.id,
-        durationMs: performance.now() - startedAt,
-      });
-      return NextResponse.json(response, { headers: scheduleReadHeaders });
-    } catch (error) {
-      return scheduleReadError(
-        error,
-        ctx,
-        EVENT_NAMES.SCHEDULE_DETAIL_READ,
-        startedAt
-      );
-    }
-  }
-);
-
 /**
  * PATCH /api/v1/schedules/[scheduleId] - Update a schedule.
  */
 export const PATCH = wrapRouteHandlerWithLogging<{
   params: Promise<{ scheduleId: string }>;
 }>(
-  { routeId: "schedules.update", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "schedules.update",
+    sameDoor: "core__schedule_manage",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, request, sessionUser, context) => {
     try {
       if (!context) throw new Error("context required for dynamic routes");
@@ -233,7 +196,11 @@ export const PATCH = wrapRouteHandlerWithLogging<{
 export const DELETE = wrapRouteHandlerWithLogging<{
   params: Promise<{ scheduleId: string }>;
 }>(
-  { routeId: "schedules.delete", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "schedules.delete",
+    sameDoor: "core__schedule_manage",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, _request, sessionUser, context) => {
     try {
       if (!context) throw new Error("context required for dynamic routes");
@@ -257,6 +224,50 @@ export const DELETE = wrapRouteHandlerWithLogging<{
       const errorResponse = handleRouteError(ctx, error);
       if (errorResponse) return errorResponse;
       throw error;
+    }
+  }
+);
+
+/** GET /api/v1/schedules/[scheduleId] — read owned schedule configuration. */
+export const GET = wrapRouteHandlerWithLogging<{
+  params: Promise<{ scheduleId: string }>;
+}>(
+  { routeId: "schedules.detail", auth: { mode: "required", getSessionUser } },
+  async (ctx, _request, sessionUser, context) => {
+    const startedAt = performance.now();
+    if (!context) throw new Error("Route context required");
+    const params = schedulesGetOperation.input.safeParse(await context.params);
+    if (!params.success)
+      return invalidScheduleRead(
+        ctx,
+        EVENT_NAMES.SCHEDULE_DETAIL_READ,
+        startedAt
+      );
+    try {
+      const schedule = await scheduleReadback().schedule(
+        toUserId(sessionUser.id),
+        params.data.scheduleId
+      );
+      const response = NextResponse.json(
+        schedulesGetOperation.output.parse(toResponse(schedule)),
+        { headers: scheduleReadHeaders }
+      );
+      logEvent(ctx.log, EVENT_NAMES.SCHEDULE_DETAIL_READ, {
+        reqId: ctx.reqId,
+        status: 200,
+        outcome: "success",
+        durationMs: performance.now() - startedAt,
+        routeId: "schedules.detail",
+        scheduleId: schedule.id,
+      });
+      return response;
+    } catch (error) {
+      return scheduleReadError(
+        error,
+        ctx,
+        EVENT_NAMES.SCHEDULE_DETAIL_READ,
+        startedAt
+      );
     }
   }
 );

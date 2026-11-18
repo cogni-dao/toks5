@@ -1,0 +1,259 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+import { describe, expect, it, vi } from "vitest";
+import {
+  type AdminCheck,
+  authorizeCaller,
+  authorizePrincipalLock,
+  bearerWriteRefusal,
+  guardTools,
+  OPEN_BY_DESIGN_ROUTES,
+  offeredToolIds,
+  ROUTE_ONLY_CAPABILITIES,
+  SAFE_METHODS,
+  SAME_DOOR_ROUTES,
+  type TerminalDenial,
+  type ToolRequires,
+} from "../src";
+import { memoryStore } from "./memory-store";
+
+const node = (subject: "member" | "admin" = "member"): ToolRequires => ({ scope: "work_item:transition", kind: "node", subject });
+const own: ToolRequires = { scope: "schedule:manage", kind: "own", subject: "member" };
+const allowAdmin: AdminCheck = async () => "allow";
+const denyAdmin: AdminCheck = async () => "denied";
+
+describe("authorizePrincipalLock", () => {
+  it("opens on a live role and ignores subject and kind-own subject rules", async () => {
+    const store = memoryStore({ roles: [{ principal: "p", scope: "schedule:manage" }] });
+    expect(await authorizePrincipalLock(store, { principalId: "p", requires: own })).toEqual({ decision: "allow", basis: "role" });
+  });
+  it("denies with no principal, no role, an account scope with no account, an unknown kind, and reports an outage", async () => {
+    const store = memoryStore();
+    expect(await authorizePrincipalLock(store, { requires: node() })).toMatchObject({ reason: "no_principal" });
+    expect(await authorizePrincipalLock(store, { principalId: "p", requires: node() })).toMatchObject({ reason: "no_role" });
+    expect(await authorizePrincipalLock(store, { principalId: "p", requires: { ...node(), kind: "account" } })).toMatchObject({ reason: "no_account" });
+    expect(await authorizePrincipalLock(store, { principalId: "p", requires: { ...node(), kind: "weird" as never } })).toMatchObject({ reason: "unknown_contract_value" });
+    expect(await authorizePrincipalLock(memoryStore({ failing: true }), { principalId: "p", requires: node() })).toMatchObject({ code: "authz_unavailable" });
+  });
+});
+
+describe("authorizeCaller (the route door)", () => {
+  const withRole = () => memoryStore({ roles: [{ principal: "agent", scope: "work_item:transition" }] });
+  it("a bearer without a role row is policy_denied; with one it is allowed; revoked it is denied again", async () => {
+    expect(await authorizeCaller(memoryStore(), denyAdmin, { userId: "agent", via: "bearer", requires: node() })).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_role" });
+    const store = withRole();
+    expect(await authorizeCaller(store, denyAdmin, { userId: "agent", via: "bearer", requires: node() })).toMatchObject({ decision: "allow" });
+    store.roles[0]!.revoked = true;
+    expect(await authorizeCaller(store, denyAdmin, { userId: "agent", via: "bearer", requires: node() })).toMatchObject({ decision: "deny" });
+  });
+  it("a store outage on a bearer is authz_unavailable", async () => {
+    expect(await authorizeCaller(memoryStore({ failing: true }), denyAdmin, { userId: "agent", via: "bearer", requires: node() })).toMatchObject({ code: "authz_unavailable" });
+  });
+  it("a bearer meets the one admin check on an admin-subject scope: its own wallet decides, never the role row alone", async () => {
+    const seen: string[] = [];
+    const check = (verdict: "allow" | "denied") => async (who: string) => { seen.push(who); return verdict; };
+    expect(await authorizeCaller(withRole(), check("denied"), { userId: "agent", via: "bearer", requires: node("admin") })).toMatchObject({ decision: "deny", reason: "subject_not_admin" });
+    expect(await authorizeCaller(withRole(), check("allow"), { userId: "agent", via: "bearer", requires: node("admin") })).toMatchObject({ decision: "allow" });
+    expect(seen).toEqual(["agent", "agent"]);
+  });
+  it("a bearer is the subject for own-data scopes", async () => {
+    const store = memoryStore({ roles: [{ principal: "agent", scope: "schedule:manage" }] });
+    expect(await authorizeCaller(store, denyAdmin, { userId: "agent", via: "bearer", requires: own })).toMatchObject({ decision: "allow" });
+  });
+  it("a human session needs no role row: member passes, admin needs the admin check", async () => {
+    const store = memoryStore();
+    expect(await authorizeCaller(store, denyAdmin, { userId: "h", via: "session", requires: node() })).toMatchObject({ decision: "allow", basis: "signed_in" });
+    expect(await authorizeCaller(store, denyAdmin, { userId: "h", via: "session", requires: node("admin") })).toMatchObject({ decision: "deny", reason: "subject_not_admin" });
+    expect(await authorizeCaller(store, allowAdmin, { userId: "h", via: "session", requires: node("admin") })).toMatchObject({ decision: "allow" });
+    expect(await authorizeCaller(store, async () => "unavailable", { userId: "h", via: "session", requires: node("admin") })).toMatchObject({ code: "authz_unavailable" });
+  });
+  it("knowledge.read: a human reads unchanged, a bearer needs a knowledge:read role row", async () => {
+    const requires = ROUTE_ONLY_CAPABILITIES["knowledge.read"]!.requires;
+    expect(requires).toMatchObject({ scope: "knowledge:read", kind: "node", subject: "member" });
+    expect(await authorizeCaller(memoryStore(), denyAdmin, { userId: "h", via: "session", requires })).toMatchObject({ decision: "allow", basis: "signed_in" });
+    expect(await authorizeCaller(memoryStore(), denyAdmin, { userId: "a", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_role" });
+    expect(await authorizeCaller(memoryStore({ roles: [{ principal: "a", scope: "knowledge:contribute" }] }), denyAdmin, { userId: "a", via: "bearer", requires })).toMatchObject({ decision: "deny" });
+    expect(await authorizeCaller(memoryStore({ roles: [{ principal: "a", scope: "knowledge:read" }] }), denyAdmin, { userId: "a", via: "bearer", requires })).toMatchObject({ decision: "allow" });
+    expect(ROUTE_ONLY_CAPABILITIES["knowledge.read"]!.routes).toEqual(expect.arrayContaining(["knowledge.list", "knowledge.get", "knowledge.graph"]));
+  });
+
+  it("knowledge.contribute: a human proposes unchanged, a bearer needs a role row", async () => {
+    const requires = ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]!.requires;
+    expect(await authorizeCaller(memoryStore(), denyAdmin, { userId: "h", via: "session", requires })).toMatchObject({ decision: "allow" });
+    expect(await authorizeCaller(memoryStore(), denyAdmin, { userId: "a", via: "bearer", requires })).toMatchObject({ decision: "deny", reason: "no_role" });
+    expect(await authorizeCaller(memoryStore({ roles: [{ principal: "a", scope: "knowledge:contribute" }] }), denyAdmin, { userId: "a", via: "bearer", requires })).toMatchObject({ decision: "allow" });
+  });
+});
+
+// bug.0019: the door answers by scope, never by who created the row. The caller id below is deliberately a principal
+// that created nothing (a re-registered agent), so these prove authority is the role row, not creator equality.
+describe("creator is not a gate (bug.0019)", () => {
+  const append = ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]!.requires;
+  const patch = node();
+  const cases: Array<[string, ToolRequires, string]> = [
+    ["work.items.patch", patch, "work_item:transition"],
+    ["knowledge.contributions.commits.append", append, "knowledge:contribute"],
+  ];
+  for (const [route, requires, scope] of cases) {
+    it(`${route}: a new principal with the ${scope} role passes; without it, policy_denied; revoked, denied again`, async () => {
+      const store = memoryStore({ roles: [{ principal: "new-principal", scope }] });
+      expect(await authorizeCaller(store, denyAdmin, { userId: "new-principal", via: "bearer", requires })).toMatchObject({ decision: "allow", basis: "role" });
+      expect(await authorizeCaller(store, denyAdmin, { userId: "other-principal", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_role" });
+      store.roles[0]!.revoked = true;
+      expect(await authorizeCaller(store, denyAdmin, { userId: "new-principal", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "policy_denied" });
+    });
+    it(`${route}: a signed-in human (including a node admin) passes without a role row`, async () => {
+      const store = memoryStore();
+      expect(await authorizeCaller(store, denyAdmin, { userId: "h", via: "session", requires })).toMatchObject({ decision: "allow" });
+      expect(await authorizeCaller(store, allowAdmin, { userId: "admin", via: "session", requires })).toMatchObject({ decision: "allow" });
+    });
+  }
+  it("the append route is declared on the knowledge.contribute door and is no longer deferred", async () => {
+    const { DEFERRED_WRITE_ROUTES } = await import("../src");
+    expect(ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]!.routes).toContain("knowledge.contributions.commits.append");
+    expect("knowledge.contributions.commits.append" in DEFERRED_WRITE_ROUTES).toBe(false);
+  });
+});
+
+describe("DENIAL_IS_TERMINAL", () => {
+  const tools = [
+    { id: "read_tool", effect: "read_only" },
+    { id: "write_tool", effect: "state_change" },
+    { id: "undeclared", effect: "state_change" },
+    { id: "mcp_tool", effect: "external_side_effect" },
+  ];
+  const requiresById = { write_tool: { scope: "knowledge:write", kind: "node", subject: "admin" } } as Record<string, ToolRequires>;
+  const deps = (store: ReturnType<typeof memoryStore>, onDecision = vi.fn()) => ({ withStore: <T>(fn: (s: typeof store) => Promise<T>) => fn(store), onDecision });
+
+  it("offers a read tool always and a write tool only when the principal lock opens", async () => {
+    const granted = memoryStore({ roles: [{ principal: "p", scope: "knowledge:write" }] });
+    expect((await offeredToolIds(tools, requiresById, { principalId: "p" }, deps(granted))).offered).toEqual(["read_tool", "write_tool"]);
+    const none = await offeredToolIds(tools, requiresById, { principalId: "p" }, deps(memoryStore()));
+    expect(none.offered).toEqual(["read_tool"]);
+    expect(none.excluded.map((e) => [e.tool, e.reason])).toEqual([["write_tool", "no_role"], ["undeclared", "no_requires"], ["mcp_tool", "no_requires"]]);
+  });
+  it("offers no write tool to a run with no principal, and excludes on an outage", async () => {
+    expect((await offeredToolIds(tools, requiresById, {}, deps(memoryStore()))).offered).toEqual(["read_tool"]);
+    const down = await offeredToolIds(tools, requiresById, { principalId: "p" }, deps(memoryStore({ failing: true })));
+    expect(down.offered).toEqual(["read_tool"]);
+    expect(down.excluded[0]).toMatchObject({ tool: "write_tool", code: "authz_unavailable" });
+  });
+  it("logs one not_offered decision per excluded tool, tied to the run", async () => {
+    const onDecision = vi.fn();
+    await offeredToolIds(tools, requiresById, { principalId: "p", subjectUserId: "s", payer: "b", runId: "run-1" }, deps(memoryStore(), onDecision));
+    expect(onDecision).toHaveBeenCalledTimes(3);
+    expect(onDecision.mock.calls[0]![0]).toMatchObject({ principal: "p", subject: "s", payer: "b", tool: "write_tool", decision: "deny", reason: "not_offered:no_role", runId: "run-1" });
+  });
+  it("reads the store once for the whole run, however many write tools it lists", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ id: `w${i}`, effect: "state_change" }));
+    const byId = Object.fromEntries(many.map((t, i) => [t.id, { scope: `scope:${i % 3}`, kind: "node", subject: "member" } as ToolRequires]));
+    const store = memoryStore({ roles: [{ principal: "p", scope: "scope:1" }] });
+    const withStore = vi.fn(<T,>(fn: (s: typeof store) => Promise<T>) => fn(store));
+    const liveScopes = vi.spyOn(store, "liveScopes");
+    const hasLiveRole = vi.spyOn(store, "hasLiveRole");
+    const { offered } = await offeredToolIds(many, byId, { principalId: "p" }, { withStore });
+    expect(withStore).toHaveBeenCalledTimes(1);
+    expect(liveScopes).toHaveBeenCalledTimes(1);
+    expect(hasLiveRole).not.toHaveBeenCalled();
+    expect(offered).toEqual(["w1", "w4", "w7"]);
+  });
+  it("withholds an own-data tool from a run with no subject, matching authorize()'s no_subject deny", async () => {
+    const ownTools = [{ id: "own_tool", effect: "state_change" }];
+    const byId = { own_tool: { scope: "schedule:manage", kind: "own", subject: "member" } as ToolRequires };
+    const store = memoryStore({ roles: [{ principal: "p", scope: "schedule:manage" }] });
+    expect((await offeredToolIds(ownTools, byId, { principalId: "p" }, deps(store))).excluded[0]).toMatchObject({ tool: "own_tool", reason: "no_subject" });
+    expect((await offeredToolIds(ownTools, byId, { principalId: "p", subjectUserId: "s" }, deps(store))).offered).toEqual(["own_tool"]);
+  });
+  it("an exec-time denial calls onTerminalDenial once, before it throws", async () => {
+    const seen: TerminalDenial[] = [];
+    const store = memoryStore({ roles: [{ principal: "p", scope: "knowledge:write" }] });
+    const g = guardTools(
+      { write_tool: { id: "write_tool", effect: "state_change", exec: vi.fn(async () => "ok") } },
+      requiresById,
+      { principalId: "p", subjectUserId: "member" },
+      { withStore: (fn) => fn(store), adminCheck: denyAdmin, onTerminalDenial: (d) => seen.push(d) }
+    );
+    await expect(g.write_tool!.exec(1 as never, undefined as never, undefined as never)).rejects.toThrow("Tool call denied by policy");
+    expect(seen).toEqual([{ tool: "write_tool", code: "policy_denied", reason: "subject_not_admin" }]);
+  });
+  it("an allowed call never calls onTerminalDenial", async () => {
+    const onTerminalDenial = vi.fn();
+    const store = memoryStore({ roles: [{ principal: "p", scope: "knowledge:write" }] });
+    const g = guardTools(
+      { write_tool: { id: "write_tool", effect: "state_change", exec: vi.fn(async () => "ok") } },
+      requiresById,
+      { principalId: "p", subjectUserId: "admin" },
+      { withStore: (fn) => fn(store), adminCheck: allowAdmin, onTerminalDenial }
+    );
+    await expect(g.write_tool!.exec(1 as never, undefined as never, undefined as never)).resolves.toBe("ok");
+    expect(onTerminalDenial).not.toHaveBeenCalled();
+  });
+});
+
+describe("authorizeCaller: an account scope (ONE_ACCOUNT_DOOR)", () => {
+  const account: ToolRequires = { scope: "account:read", kind: "account", subject: "member" };
+  const store = () =>
+    memoryStore({
+      accounts: { owner: "acct-1" },
+      roles: [{ principal: "agent", scope: "account:read", resource: "account", accountId: "acct-1" }],
+    });
+  it("the owner passes by session; a stranger, a person with no account and a missing account are denied", async () => {
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "owner", via: "session", requires: account, accountId: "acct-1" })).toEqual({ decision: "allow", basis: "owner" });
+    expect(await authorizeCaller(store(), allowAdmin, { userId: "stranger", via: "session", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny", reason: "no_account_access" });
+    expect(await authorizeCaller(store(), allowAdmin, { userId: "owner", via: "session", requires: account })).toMatchObject({ decision: "deny", reason: "no_account" });
+  });
+  it("a bearer agent passes with a live row for exactly this account, and not for another or for a node grant", async () => {
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "bearer", requires: account, accountId: "acct-1" })).toEqual({ decision: "allow", basis: "delegated" });
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "bearer", requires: account, accountId: "acct-2" })).toMatchObject({ decision: "deny" });
+    const nodeOnly = memoryStore({ roles: [{ principal: "agent", scope: "account:read" }] });
+    expect(await authorizeCaller(nodeOnly, denyAdmin, { userId: "agent", via: "bearer", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny" });
+  });
+  it("a session never takes the delegated path: a person who is not the owner is denied even if they hold a row", async () => {
+    expect(await authorizeCaller(store(), denyAdmin, { userId: "agent", via: "session", requires: account, accountId: "acct-1" })).toMatchObject({ decision: "deny" });
+  });
+});
+
+// bug.0045: DENY_BY_DEFAULT is one pure decision a node's wrapper calls, so every fork that calls it gets the same rule.
+describe("bearerWriteRefusal (DENY_BY_DEFAULT)", () => {
+  const base = { method: "POST", via: "bearer" as const, doorRuns: false, routeId: "some.write" };
+  const refused = { code: "bearer_write_undeclared" };
+
+  it("a bearer write that declares nothing is refused", () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) expect(bearerWriteRefusal({ ...base, method })).toEqual(refused);
+  });
+  it("a safe method passes (GET, HEAD, OPTIONS, any case)", () => {
+    expect([...SAFE_METHODS].sort()).toEqual(["GET", "HEAD", "OPTIONS"]);
+    for (const method of ["GET", "HEAD", "OPTIONS", "get"]) expect(bearerWriteRefusal({ ...base, method })).toBeNull();
+  });
+  it("a session passes", () => {
+    expect(bearerWriteRefusal({ ...base, via: "session" })).toBeNull();
+  });
+  it("fails closed: a `via` that is not session is a bearer (undefined at runtime is refused on a write)", () => {
+    expect(bearerWriteRefusal({ ...base, via: undefined as unknown as "bearer" })).toEqual(refused);
+  });
+  it("a door that runs passes; a door that does not run does not", () => {
+    expect(bearerWriteRefusal({ ...base, doorRuns: true })).toBeNull();
+    expect(bearerWriteRefusal({ ...base, doorRuns: false })).toEqual(refused);
+  });
+  it("a bearerWrite reason passes; an empty one does not", () => {
+    expect(bearerWriteRefusal({ ...base, bearerWrite: "the caller's own data" })).toBeNull();
+    expect(bearerWriteRefusal({ ...base, bearerWrite: "" })).toEqual(refused);
+  });
+  it("an open-by-design route passes", () => {
+    for (const routeId of Object.keys(OPEN_BY_DESIGN_ROUTES)) expect(bearerWriteRefusal({ ...base, routeId })).toBeNull();
+  });
+});
+
+describe("work item artifacts (task.0028)", () => {
+  it("the artifact write rides the work_item:transition door as its own tool twin; no review scope exists", () => {
+    expect(SAME_DOOR_ROUTES.core__work_item_artifact_record).toEqual({
+      scope: "work_item:transition",
+      routes: ["work.items.artifacts.create"],
+    });
+    expect(SAME_DOOR_ROUTES.core__work_item_update?.scope).toBe("work_item:transition");
+    const scopes = Object.values(ROUTE_ONLY_CAPABILITIES).map((c) => c.requires.scope);
+    expect(scopes).not.toContain("work_item:review");
+    expect(Object.values(ROUTE_ONLY_CAPABILITIES).flatMap((c) => c.routes)).not.toContain("work.items.artifacts.create");
+  });
+});

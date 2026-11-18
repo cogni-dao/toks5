@@ -16,15 +16,16 @@
  * @internal
  */
 
-import { createKnowledgeReadImplementation, knowledgeReadContract } from "@cogni/ai-tools";
-import { buildKnowledgeGraph, type Citation, createKnowledgeCapability } from "@cogni/knowledge-store";
+import {
+  buildKnowledgeGraph,
+  type Citation,
+  readKnowledgeGraph,
+} from "@cogni/knowledge-store";
 import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
-import { KnowledgeRowSchema } from "@cogni/node-contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   loadDomains,
-  loadKnowledgeGraph,
   loadKnowledgeList,
 } from "@/app/(app)/knowledge/_server/loaders";
 
@@ -91,9 +92,9 @@ describe("knowledge SSR loaders", () => {
     expect(d?.entryCount).toBe(2);
   });
 
-  it("loadKnowledgeGraph collapses to nodes + edges via one citation read", async () => {
+  it("readKnowledgeGraph (the graph route's handler) collapses to nodes + edges via one snapshot", async () => {
     const store = await seed();
-    const g = await loadKnowledgeGraph(store);
+    const g = JSON.parse((await readKnowledgeGraph(store)).body ?? "");
     expect(g.nodes.map((n) => n.id).sort()).toEqual(["k1", "k2"]);
     expect(g.edges).toHaveLength(1);
     expect(g.edges[0]).toMatchObject({ source: "k1", target: "k2" });
@@ -119,22 +120,5 @@ describe("knowledge SSR loaders", () => {
 
     expect(graph.edges.some((e) => e.target === "ghost")).toBe(false);
     expect(graph.edges).toHaveLength(1);
-  });
-});
-
-
-describe("Toks5 canonical knowledge read parity", () => {
-  it("carries every canonical field through HTTP loader and local tool validation", async () => {
-    const store = await seed();
-    const http = await loadKnowledgeList(store, { domain: DOMAIN });
-    const tool = createKnowledgeReadImplementation({ knowledgeCapability: createKnowledgeCapability(store) });
-    const output = knowledgeReadContract.outputSchema.parse(await tool.execute({ id: "k1" }));
-    const row = http.items.find(entry => entry.id === "k1");
-    expect(row).toBeDefined();
-    for (const key of Object.keys(KnowledgeRowSchema.shape)) {
-      expect(row).toHaveProperty(key);
-      expect(output.entries[0]).toHaveProperty(key);
-    }
-    expect(KnowledgeRowSchema.parse(output.entries[0])).toEqual(row);
   });
 });

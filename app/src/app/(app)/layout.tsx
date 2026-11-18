@@ -15,8 +15,7 @@
 
 import type { ReactNode } from "react";
 
-import { SidebarInset, SidebarProvider } from "@/components";
-import { AppSidebar, AppTopBar } from "@/features/layout";
+import { AppShell } from "@/features/layout/components/AppShell";
 import { EntityPeekProvider } from "./_components/EntityPeek";
 
 export default function AppLayout({
@@ -25,14 +24,8 @@ export default function AppLayout({
   children: ReactNode;
 }): ReactNode {
   return (
-    <SidebarProvider>
-      <AppSidebar />
-      <SidebarInset className="min-w-0">
-        <AppTopBar />
-        <div className="flex flex-1 flex-col overflow-auto">
-          <EntityPeekProvider>{children}</EntityPeekProvider>
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+    <AppShell>
+      <EntityPeekProvider>{children}</EntityPeekProvider>
+    </AppShell>
   );
 }

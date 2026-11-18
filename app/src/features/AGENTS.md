@@ -44,7 +44,7 @@ Vertical slices containing use cases like accounts/, ai/, and home/. Orchestrate
 
 ## Public Surface
 
-- **Exports:** accounts/services (admin ops), ai/services (completion), identity/services (nonce and binding-import policy), home/components (landing page), ingestion/services (webhook receiver), site-meta/services (route manifest)
+- **Exports:** scheduling/services (owned history and thread correlation), cognition/services (canonical local governing discovery), accounts/services (admin ops), ai/services (completion), identity/services (nonce and binding-import policy), home/components (landing page), ingestion/services (webhook receiver), site-meta/services (route manifest)
 - **Routes (if any):** Feature-specific routes via app/
 - **Env/Config keys:** Feature-specific environment variables
 - **Files considered API:** actions.ts, index.ts, public components
@@ -72,7 +72,7 @@ pnpm typecheck
 ## Standards
 
 - Each feature isolated with own actions/, services/, components/, hooks/, types/, constants/
-- Features import components via kit/barrel only; vendor and styles are blocked by ESLint
+- Features import components via kit/barrel or the narrow public entries `@/components/startup`, `@/components/sheet` and `@/components/chart`; vendor and styles remain blocked
 - Unit tests with mocked ports required
 
 ## Dependencies

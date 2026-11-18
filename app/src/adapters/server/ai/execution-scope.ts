@@ -4,11 +4,15 @@
 /**
  * Module: `@adapters/server/ai/execution-scope`
  * Purpose: AsyncLocalStorage-based execution scope for billing, abort signal, and usage source.
- * Scope: Provides per-run billing context, abort signal, and usage source (SourceSystem) to static inner providers via Node-native ALS. Does not carry shared contract types — billing is app-local.
+ * Scope: Provides per-run billing context, abort signal, usage source (SourceSystem), and the run identity split (acting principal vs human subject) to static inner providers via Node-native ALS. Does not carry shared contract types — billing is app-local.
  * Invariants:
  *   - ALS_NOT_SHARED: ExecutionScope is app-local, never exported to @cogni/graph-execution-core
  *   - BILLING_SET_BY_LAUNCHER: runInScope is called by the launcher (chat, schedule, webhook)
  *   - ABORT_CHAT_ONLY: abortSignal is temporary tech debt for browser disconnect, not durable cancellation
+ *   - THREE_IDENTITIES: a run has an acting principal (`principalId`, the catalog agent's user id), a subject
+ *     (`subjectUserId`, the authenticated caller, bearer agents included; absent for a run with no caller) and a payer (`billing`). The launcher
+ *     sets the subject; the tool guard binds the principal around each tool call. RLS and user-scoped
+ *     capabilities use the subject, else the principal (`scopeUserId`).
  * Side-effects: none (ALS is process-scoped, no I/O)
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/unified-graph-launch.md
  * @public
@@ -16,7 +20,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { SourceSystem } from "@cogni/ai-core";
+import type { ModelRef, SourceSystem } from "@cogni/ai-core";
 import type { BillingContext, LlmService } from "@/ports";
 
 /**
@@ -27,14 +31,26 @@ import type { BillingContext, LlmService } from "@/ports";
  */
 export interface ExecutionScope {
   readonly billing: BillingContext;
-  /** Actor who initiated this run. Used by tools that need user-scoped operations (e.g., schedule CRUD). */
-  readonly actorUserId?: string;
+  /** Exact host-selected model, including its connection, for scheduled follow-up work. */
+  readonly modelRef?: ModelRef;
+  /** The acting agent principal's user id (agent_principals.user_id). Bound per tool call by the guard. */
+  readonly principalId?: string;
+  /** The authenticated caller this run serves (human or bearer agent). Absent for a run with no caller; never the system principal. */
+  readonly subjectUserId?: string;
   /** Chat-only temporary tech debt — browser disconnect, not durable cancellation. */
   readonly abortSignal?: AbortSignal;
   /** Resolved LlmService for this run (from ModelProviderPort.createLlmService). */
   readonly llmService: LlmService;
   /** Billing source system for usage attribution (from ModelProviderPort.usageSource). */
   readonly usageSource: SourceSystem;
+}
+
+/**
+ * The user id that user-scoped operations (RLS, schedule CRUD, work-item writes) run as:
+ * the subject when there is one, else the principal's own user id. Undefined means no identity.
+ */
+export function scopeUserId(scope: ExecutionScope): string | undefined {
+  return scope.subjectUserId ?? scope.principalId;
 }
 
 const executionScopeStorage = new AsyncLocalStorage<ExecutionScope>();
@@ -46,7 +62,7 @@ export function getExecutionScope(): ExecutionScope {
   const scope = executionScopeStorage.getStore();
   if (!scope) {
     throw new Error(
-      "getExecutionScope() called outside runInScope — billing context not available"
+      "getExecutionScope() called outside runInScope — billing context not available",
     );
   }
   return scope;

@@ -9,7 +9,7 @@ import { KnowledgeDetail } from "./KnowledgeDetail";
 export function useKnowledgeSelection(id: string | null) {
   return useQuery({
     queryKey: ["knowledge", "detail", id],
-    queryFn: () => fetchKnowledgeEntry(id ?? ""),
+    queryFn: ({ signal }) => fetchKnowledgeEntry(id ?? "", signal),
     enabled: id !== null,
     staleTime: 30_000,
     retry: false,

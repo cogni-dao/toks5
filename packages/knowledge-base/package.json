@@ -1,0 +1,47 @@
+{
+  "name": "@cogni-dao/knowledge-base",
+  "version": "0.4.0",
+  "license": "LicenseRef-PolyForm-Shield-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cogni-DAO/node-template.git",
+    "directory": "packages/knowledge-base"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./cognition-navigation": {
+      "types": "./dist/cognition-navigation.d.ts",
+      "import": "./dist/cognition-navigation.js",
+      "default": "./dist/cognition-navigation.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "postbuild": "node -e \"const fs=require('fs'); for(const f of ['dist/index.js','dist/cognition-navigation.js']){if(!fs.existsSync(f)){console.error('ERROR: '+f+' missing'); process.exit(1)}}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.7"
+  },
+  "peerDependencies": {
+    "@cogni/knowledge-store": "*"
+  },
+  "devDependencies": {
+    "@cogni/knowledge-store": "workspace:@cogni-dao/knowledge-store@*",
+    "tsup": "^8.5.1",
+    "typescript": "^5",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^3.1.4"
+  }
+}

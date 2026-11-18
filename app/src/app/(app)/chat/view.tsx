@@ -4,12 +4,12 @@
 /**
  * Module: `@app/(app)/chat/view`
  * Purpose: Chat view with assistant-ui Thread. Thread history lives in the global AppSidebar via Zustand store.
- * Scope: Client component that renders model/graph selection and ChatRuntimeProvider with key-based remount. Wrapped in Suspense by page.tsx for useSearchParams() support.
+ * Scope: Client component that renders model/graph selection and ChatRuntimeProvider with key-based remount. chat/loading.tsx provides Suspense for useSearchParams().
  * Invariants:
  *   - INV-UI-NO-PAID-DEFAULT-WHEN-ZERO: gates rendering until models + credits resolve
  *   - INV-NO-CLIENT-INVENTED-MODEL-IDS: all model IDs from server's models list
  *   - KEY_REMOUNT: `key={activeThreadKey ?? "new"}` forces full unmount/remount on thread switch, aborting in-flight streams
- *   - LOADING_GATE: `isThreadLoading` prevents ChatRuntimeProvider render until thread messages load
+ *   - LOADING_GATE: requested thread loading, error and empty states never mount ChatRuntimeProvider
  * Side-effects: IO (chat API, thread list/load/delete via React Query)
  * Notes: Thread sidebar state is registered into useChatSidebarStore for the global AppSidebar to consume.
  * Links: src/features/ai/chat/providers/ChatRuntimeProvider.client.tsx, src/features/ai/chat/hooks/useThreads.ts
@@ -32,6 +32,7 @@ import {
   useState,
 } from "react";
 import { Button, ErrorAlert, Thread } from "@/components";
+import { BrainLoading } from "@/components/kit/feedback/BrainLoading";
 import { useChatSidebarStore } from "@/features/ai/chat/components/ChatSidebarContext";
 import { ChatRuntimeProvider } from "@/features/ai/chat/providers/ChatRuntimeProvider.client";
 import { toErrorAlertProps } from "@/features/ai/chat/utils/toErrorAlertProps";
@@ -102,7 +103,6 @@ export function ChatView(): ReactNode {
     .map((m) => m.ref.modelId);
 
   // Single initialization effect
-  // biome-ignore lint/correctness/useExhaustiveDependencies: models derived from modelsQuery.data (already in deps)
   useEffect(() => {
     // Skip if user already selected or already initialized
     if (hasInitializedRef.current || hasUserSelectedRef.current) return;
@@ -266,11 +266,7 @@ export function ChatView(): ReactNode {
 
   // INV-UI-NO-PAID-DEFAULT-WHEN-ZERO: Gate rendering until init completes
   if (!hasInitializedRef.current) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
+    return <BrainLoading />;
   }
 
   // INV-NO-INTERACTION-BEFORE-READY: Blocked state shows error only, no chat
@@ -317,11 +313,16 @@ export function ChatView(): ReactNode {
 
   // Gate provider render: for existing threads, wait until messages are loaded.
   const isThreadLoading = activeThreadKey != null && threadData.isPending;
+  if (isThreadLoading) {
+    return <BrainLoading />;
+  }
 
-  // A requested thread must load saved messages before mounting a new composer.
-  const threadUnavailable =
+  // A requested missing/deleted/foreign thread can return HTTP 200 with no messages.
+  const isThreadUnavailable =
     activeThreadKey != null &&
     (threadData.isError || !threadData.data?.messages.length);
+
+  // Only a successfully loaded, nonempty requested thread reaches the provider.
   const initialMessages: UIMessage[] =
     activeThreadKey != null && threadData.data
       ? (threadData.data.messages as UIMessage[])
@@ -329,11 +330,7 @@ export function ChatView(): ReactNode {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {isThreadLoading ? (
-        <div className="flex flex-1 items-center justify-center">
-          <div className="text-muted-foreground">Loading thread...</div>
-        </div>
-      ) : threadUnavailable ? (
+      {isThreadUnavailable ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
           <h1 className="font-semibold text-lg">
             {threadData.isError
@@ -345,7 +342,7 @@ export function ChatView(): ReactNode {
             className="max-w-md text-muted-foreground text-sm"
           >
             {threadData.isError
-              ? "Try again to load this conversation."
+              ? "We couldn’t load this conversation. Try again."
               : "No saved messages are available. The run may still be in progress, or the conversation may no longer be available."}
           </p>
           <div className="flex gap-2">

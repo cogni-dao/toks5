@@ -11,6 +11,7 @@
  * @public
  */
 
+export * from "./agent-authority";
 export * from "./ai";
 export * from "./ai-threads";
 export * from "./attribution";
@@ -18,12 +19,11 @@ export * from "./auth";
 export * from "./billing";
 export * from "./connections";
 export * from "./identity";
-// Operational metric evidence, defined once in the published package; migrations stay node-local.
-export {
-  metricObservations,
-  metricRefreshCursors,
-} from "@cogni-dao/metrics/schema";
 // poly-copy-trade relocated to nodes/poly/app/src/shared/db/copy-trade.ts (task.0322)
 export * from "./profile";
 export * from "./refs";
 export * from "./scheduling";
+
+export * from "./work-item-leases";
+
+export * from "./metric-observations.js";

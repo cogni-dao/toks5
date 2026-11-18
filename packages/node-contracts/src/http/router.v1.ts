@@ -17,6 +17,10 @@ import { initContract } from "@ts-rest/core";
 import { metaLivezOutputSchema } from "../meta.livez.read.v1.contract";
 import { metaReadyzOutputSchema } from "../meta.readyz.read.v1.contract";
 import { metaRoutesOutputSchema } from "../meta.route-manifest.read.v1.contract";
+import {
+  workItemsArtifactsCreateOperation,
+  workItemsArtifactsListOperation,
+} from "../work.items.artifacts.v1.contract";
 import { workItemsCreateOperation } from "../work.items.create.v1.contract";
 import { workItemsDeleteOperation } from "../work.items.delete.v1.contract";
 import { workItemsGetOperation } from "../work.items.get.v1.contract";
@@ -28,6 +32,10 @@ import {
 } from "../work.items.coordination.v1.contract";
 import { workItemsListOperation } from "../work.items.list.v1.contract";
 import { workItemsPatchOperation } from "../work.items.patch.v1.contract";
+import {
+  knowledgeHistoryOperation,
+  workItemsHistoryOperation,
+} from "../history.v1.contract";
 
 const c = initContract();
 
@@ -101,6 +109,43 @@ export const ApiContractV1 = c.router({
       200: workItemsPatchOperation.output,
     },
   },
+  workItemsHistory: {
+    method: "GET",
+    path: "/work/items/:id/history",
+    summary: workItemsHistoryOperation.summary,
+    description: workItemsHistoryOperation.description,
+    responses: {
+      200: workItemsHistoryOperation.output,
+    },
+  },
+  workItemsArtifactsCreate: {
+    method: "POST",
+    path: "/work/items/:id/artifacts",
+    summary: workItemsArtifactsCreateOperation.summary,
+    description: workItemsArtifactsCreateOperation.description,
+    body: workItemsArtifactsCreateOperation.input,
+    responses: {
+      201: workItemsArtifactsCreateOperation.output,
+    },
+  },
+  workItemsArtifactsList: {
+    method: "GET",
+    path: "/work/items/:id/artifacts",
+    summary: workItemsArtifactsListOperation.summary,
+    description: workItemsArtifactsListOperation.description,
+    responses: {
+      200: workItemsArtifactsListOperation.output,
+    },
+  },
+  knowledgeHistory: {
+    method: "GET",
+    path: "/knowledge/:id/history",
+    summary: knowledgeHistoryOperation.summary,
+    description: knowledgeHistoryOperation.description,
+    responses: {
+      200: knowledgeHistoryOperation.output,
+    },
+  },
   workItemsDelete: {
     method: "DELETE",
     path: "/work/items/:id",
@@ -108,7 +153,7 @@ export const ApiContractV1 = c.router({
     description: workItemsDeleteOperation.description,
     body: c.noBody(),
     responses: {
-      200: workItemsDeleteOperation.output,
+      410: workItemsDeleteOperation.output,
     },
   },
   workItemsClaim: {

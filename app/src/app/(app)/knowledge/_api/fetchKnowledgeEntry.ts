@@ -10,21 +10,21 @@
  * @internal
  */
 
-import type { MetricService } from "@cogni-dao/metrics";
 import type { KnowledgeRow } from "@cogni/node-contracts";
-
-type KnowledgeEntryWithKpis = KnowledgeRow & {
-  kpis?: Awaited<ReturnType<MetricService["bindings"]>>;
-};
+import type { MetricService } from "@cogni-dao/metrics";
 
 export async function fetchKnowledgeEntry(
-  id: string
-): Promise<KnowledgeEntryWithKpis> {
+  id: string,
+  signal?: AbortSignal
+): Promise<
+	KnowledgeRow & { kpis?: Awaited<ReturnType<MetricService["bindings"]>> }
+> {
   const response = await fetch(`/api/v1/knowledge/${encodeURIComponent(id)}`, {
     method: "GET",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     cache: "no-store",
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({
@@ -32,5 +32,7 @@ export async function fetchKnowledgeEntry(
     }));
     throw new Error(error.error || `HTTP ${response.status}`);
   }
-  return response.json() as Promise<KnowledgeEntryWithKpis>;
+  return response.json() as Promise<
+    KnowledgeRow & { kpis?: Awaited<ReturnType<MetricService["bindings"]>> }
+  >;
 }

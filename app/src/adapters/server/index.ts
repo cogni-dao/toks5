@@ -19,6 +19,7 @@ export {
   DrizzleExecutionGrantWorkerAdapter,
   DrizzleExecutionRequestAdapter,
   DrizzleGraphRunAdapter,
+  DrizzleScheduleRunReader,
   DrizzleScheduleUserAdapter,
   DrizzleScheduleWorkerAdapter,
   type LoggerLike,
@@ -30,7 +31,11 @@ export type { AgentCatalogProvider } from "./ai/agent-catalog.provider";
 export { AggregatingAgentCatalog } from "./ai/aggregating-agent-catalog";
 export type { ExecutionScope } from "./ai/execution-scope";
 // Execution scope (ALS) — per-run billing + actor context for tools
-export { getExecutionScope, runInScope } from "./ai/execution-scope";
+export {
+  getExecutionScope,
+  runInScope,
+  scopeUserId,
+} from "./ai/execution-scope";
 export {
   type CompletionStreamFn,
   type CompletionStreamParams,
@@ -114,7 +119,6 @@ export {
 // NOTE: Sandbox adapters (SandboxRunnerAdapter, SandboxGraphProvider) are NOT
 // re-exported here. They pull in dockerode → ssh2 → cpu-features (native addon)
 // which breaks Turbopack bundling. Import directly from subpath when needed:
-//   import { SandboxAgentCatalogProvider } from "@/adapters/server/sandbox/sandbox-agent-catalog.provider"
 //   const { SandboxGraphProvider, ... } = await import("@/adapters/server/sandbox")
 // Temporal adapters - schedule control
 export {

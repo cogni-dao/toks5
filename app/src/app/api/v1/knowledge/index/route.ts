@@ -3,9 +3,9 @@
 
 /**
  * Module: `@app/api/v1/knowledge/index/route`
- * Purpose: GET /api/v1/knowledge/index — the content-free routing projection, optionally filtered by `?q=` against useWhen.
- * Scope: Any authenticated principal. Reads via container.knowledgeStorePort.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL, INDEX_CARRIES_NO_CONTENT, Q_MATCHES_USEWHEN_ONLY.
+ * Purpose: GET /api/v1/knowledge/index — the routing projection. Returns id + entryType + retrieval trigger per entry WITHOUT content, so an agent can choose a shelf entry without downloading bodies, optionally filtered to the triggers matching `?q=`.
+ * Scope: Signed-in human, or a bearer agent holding the knowledge:read role (sameDoor `knowledge.read`), mirroring the list route. Reads via container.knowledgeStorePort. Does not search titles or bodies — `q` matches the retrieval trigger only.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_NEEDS_GRANT, INDEX_CARRIES_NO_CONTENT, Q_MATCHES_USEWHEN_ONLY.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
  * Links: packages/node-contracts/src/knowledge.index.v1.contract.ts
  * @public
@@ -27,6 +27,7 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
   {
     routeId: "knowledge.index",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, request, sessionUser) => {
@@ -60,28 +61,34 @@ export const GET = wrapRouteHandlerWithLogging(
 
     const allDomains = await port.listDomains();
     const targets = domain
-      ? allDomains.filter((candidate) => candidate === domain)
+      ? allDomains.filter((d) => d === domain)
       : allDomains;
+
+    // Q_MATCHES_USEWHEN_ONLY: the port filters on `useWhen`, so `total` below
+    // reports matches considered, not shelf size — a caller can still detect a
+    // truncating `limit`.
     const perDomain = await Promise.all(
-      targets.map((target) =>
-        port.listKnowledge(target, { limit, ...(q ? { q } : {}) })
-      )
+      targets.map((d) => port.listKnowledge(d, { limit, ...(q ? { q } : {}) }))
     );
 
+    // Project explicitly. INDEX_CARRIES_NO_CONTENT: content and title are
+    // dropped here on purpose — `id` names the subject and `useWhen` names the
+    // reader's situation, which is what routing needs. Anything more makes this
+    // a second browse endpoint.
     const all = perDomain.flat();
-    const items: KnowledgeIndexRow[] = all.slice(0, limit).map((row) => ({
-      id: row.id,
-      domain: row.domain,
-      entryType: row.entryType ?? "finding",
-      useWhen: row.useWhen ?? null,
+    const items: KnowledgeIndexRow[] = all.slice(0, limit).map((r) => ({
+      id: r.id,
+      domain: r.domain,
+      entryType: r.entryType ?? "finding",
+      useWhen: r.useWhen ?? null,
     }));
 
-    return NextResponse.json(
-      KnowledgeIndexResponseSchema.parse({
-        items,
-        domains: allDomains,
-        total: all.length,
-      })
-    );
+    const body = KnowledgeIndexResponseSchema.parse({
+      items,
+      domains: allDomains,
+      total: all.length,
+    });
+
+    return NextResponse.json(body);
   }
 );

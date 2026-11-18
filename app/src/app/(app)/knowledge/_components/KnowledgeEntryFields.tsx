@@ -71,6 +71,7 @@ export function KnowledgeEntryFields({
         </div>
       </Field>
 
+
       {item.tags && item.tags.length > 0 && (
         <Field label="Tags">
           <div className="flex flex-wrap gap-1.5">

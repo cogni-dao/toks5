@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/cognition/_bundle`
  * Purpose: Pure composition of the session-start kickstart bundle — the
  *   irreducible tooling invariants (code-owned) plus the markdown renderer
- *   that frames hub-delivered skills + domain pointers for a SessionStart hook.
+ *   that frames local governing triggers and static operator navigation.
  * Scope: Pure functions + the invariants constant. No I/O, no env, no container.
  * Invariants:
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: the constant is the one piece of
@@ -18,29 +18,30 @@
  *     the orientation. The section text (zero-goal bootstrap instruction,
  *     `goals unavailable: …`) ships in `@cogni/knowledge-store`'s
  *     `renderGoalsLines`; this file is only the call site (story.5101).
+ *   - ROUTE_BY_DOMAIN_AND_ARCHITECT: the Markdown carries no flat governing
+ *     index. Agents route through the orientation, node-template-architect's
+ *     subsystem table and the domain map; the JSON response keeps the complete
+ *     governingIndex for programmatic readers (story.0044).
  * Side-effects: none
  * @internal
  */
 
-import { type GoalsSection, renderGoalsLines } from "@cogni/knowledge-store";
+import {
+	type GoalsSection,
+	renderGoalsLines,
+	isGoverningEntryType,
+} from "@cogni/knowledge-store";
+import {
+	OPERATOR_KNOWLEDGE_ORIGIN,
+	OPERATOR_GUIDANCE_POINTERS,
+	OPERATOR_KNOWLEDGE_SHELVES,
+	COGNITION_CREDENTIAL_NAMES,
+} from "@cogni/knowledge-base/cognition-navigation";
 import type {
+	CognitionGoverningPointer,
 	CognitionDomainPointer,
 	CognitionSkillPointer,
 } from "@cogni/node-contracts";
-
-/**
- * No producer-side byte ceiling (story.5070).
- *
- * The loader writes `.cogni/.cognition-cache.md`, then each harness uses its
- * native full-context path: Claude Code `@import` (up to 4 MiB), Codex hook
- * stdout with `additionalContextLimit = 0`, and OpenCode `opencode.json`
- * instructions. Claude Code's SessionStart stdout/`additionalContext` is NOT a
- * safe delivery surface — it caps large output with no override — so no
- * universal hook-injection path or serve-side ceiling is assumed. The former
- * 16 KB cap (bug.5284) capped the SSoT itself and blocked realistic growth; the
- * bundle is human-curated in Dolt, not user-generated. See the canonical
- * Cognition Substrate design and the `cognition-expert` skill.
- */
 
 /**
  * The irreducible session contract. This is the ONLY cognition that is
@@ -49,9 +50,9 @@ import type {
  * domain expertise) is delivered live from the knowledge hub on top of this.
  */
 export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
-	"GROUND. Never act on intuition. Ground every decision in this node's goals, their KPIs and its documented practice: guides, skills, designs and roadmaps. Before any action, read your `<slug>-agent-orientation`, the architect skill it names, and every governing atom those name, in full. If no guide covers the action, write or refine that guide first, in the same work item. A deliberate deviation also refines the guide first. Each work-item edit names the atoms you used.",
-	"FOCUS. ONE work item and ONE node per session. Work only a triaged item: scored, goal-linked, with `moves` or a recorded measurement gap. Pick from the top five by rank, or take the item the CEO named. Every Goal you propose serves one active node goal and names the KPI it moves. Its Done when includes that KPI's reading after release. If no KPI fits, record the gap and propose one through the operator's `metrics-expert` guide first. The item is your plan: claim it and keep its Done when checklist current. The item's status gates the allowed action. Triage new work before anything else.",
-	"PROVE. Ship the smallest change that moves the KPI, the same day. Done is a PASS /validate-candidate scorecard at the exact build SHA. Then read the moved KPI on production after one metric window, against its pinned baseline. Tests are CI hygiene, never proof.",
+	"GROUND. Never act on intuition. Ground every decision in this node's goals, their KPIs and its documented practice: guides, skills, designs and roadmaps. Before any action, read the orientation, `node-template-architect`, and every governing atom it names, in full. If no guide covers the action, write or refine that guide first, in the same work item. A deliberate deviation also refines the guide first. Each work-item edit sends `cites` for the atoms you used.",
+	"FOCUS. ONE work item and ONE node per session. Work only a triaged item: scored, goal-linked, with `moves` or a recorded measurement gap. Pick from the top five by rankScore, or take the item the CEO named. Every Goal you propose serves one active node goal and names the KPI it moves. Its Done when includes that KPI's reading after release. If no KPI fits, record the gap and propose one through `metrics-expert` first. The item is your plan: claim it and keep its Done when checklist current. The item's status gates the allowed action (status table in the agent-contract). Triage new work before anything else.",
+	"PROVE. Ship the smallest change that moves the KPI, the same day. Done is a PASS /validate-candidate scorecard at the exact build SHA. Then read the moved KPI on production after one metric window, against its pinned baseline (`kpi-through-delivery`). Tests are CI hygiene, never proof.",
 	"Ship via PR: branch → CI green → flight to candidate → /validate-candidate → operator merge → promote. Watch each async gate with <watch-gate> below.",
 ];
 
@@ -68,15 +69,19 @@ export const SESSION_WATCH_GATE = `<watch-gate rule="ONE blocking command; its e
   <truth>/version.buildSha is the only ground truth — CI and workflow "success" can lie.</truth>
 </watch-gate>`;
 
-const COGNITION_ENTRY_TYPES: ReadonlySet<string> = new Set([
-	"skill",
-	"guide",
-	"playbook",
-]);
+/** Compatibility name; the shared store remains the sole membership-policy owner. */
+export const isCognitionEntry = isGoverningEntryType;
 
-/** True for hub entries that belong in an agent's actionable skills index. */
-export function isCognitionEntry(entryType: string | undefined): boolean {
-	return COGNITION_ENTRY_TYPES.has(entryType ?? "");
+function operatorNavigationLines(): string[] {
+	const { node, operator, legacyOperator } = COGNITION_CREDENTIAL_NAMES;
+	return [
+		"## Operator guidance — explicit reads",
+		"",
+		`- Guides by intent, read with \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/{id}\`: ${OPERATOR_GUIDANCE_POINTERS.map((p) => `${p.intent} → \`${p.id}\``).join(" · ")}.`,
+		`- Operator shelves (${OPERATOR_KNOWLEDGE_SHELVES.join(", ")}): \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/index?domain=<shelf>\`.`,
+		`- Local hub key \`${node}\`; operator reads use \`${operator}\`, else \`${legacyOperator}\`. Never retry another key or host on 401/403. Check grants with GET /api/v1/agent/me; request node.flight, never self-approve.`,
+		"",
+	];
 }
 
 /** Make a string safe to drop into a GFM table cell (no `|`, no line breaks). */
@@ -93,44 +98,8 @@ export interface OrientationEntry {
 	content: string;
 }
 
-/** Minimal read surface `resolveOrientation` needs from the knowledge store. */
-export interface OrientationLookupPort {
-	getKnowledge(
-		id: string,
-	): Promise<{ id: string; content: string } | null | undefined>;
-}
-
-/**
- * Resolve the current-node orientation entry by direct id lookup.
- *
- * The domain scan that feeds the skills index only reads the newest
- * PER_DOMAIN_LIMIT rows per domain, so once a domain outgrows the limit an
- * older `<slug>-agent-orientation` entry silently drops out of the scan and
- * the bundle reports it as unseeded (bug.5280). Direct lookup by exact id is
- * the ground truth; the scan result is only a fallback for suffix-named
- * entries, and the generic starter seed every node inherits comes last.
- */
-export async function resolveOrientation(
-	port: OrientationLookupPort,
-	exactOrientationId: string,
-	scannedOrientationId: string | null,
-): Promise<OrientationEntry | null> {
-	const candidates = [
-		exactOrientationId,
-		scannedOrientationId,
-		"cogni-agent-orientation",
-	];
-	for (const id of candidates) {
-		if (!id) continue;
-		const entry = await port.getKnowledge(id);
-		if (entry) {
-			return { id: entry.id, content: entry.content };
-		}
-	}
-	return null;
-}
-
 export interface RenderBundleInput {
+	governingIndex: readonly CognitionGoverningPointer[];
 	node: string;
 	name: string;
 	mission: string | null;
@@ -152,6 +121,10 @@ export interface RenderBundleInput {
  * into the model's context.
  */
 export function renderBundleMarkdown(input: RenderBundleInput): string {
+	return renderWith(input);
+}
+
+function renderWith(input: RenderBundleInput): string {
 	const {
 		node,
 		name,
@@ -184,15 +157,6 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
 	// a slugged test host. Concrete so agents stop guessing the hostname.
 	const candidateHost =
 		name === "operator" ? "test.cognidao.org" : `${name}-test.cognidao.org`;
-
-	const skillRows =
-		skillsIndex.length > 0
-			? skillsIndex
-					.map(
-						(s) => `| \`${s.id}\` | ${s.entryType} | ${escapeCell(s.title)} |`,
-					)
-					.join("\n")
-			: "| _(none merged yet)_ | | |";
 
 	const domainRows =
 		domainPointers.length > 0
@@ -236,13 +200,10 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
 		"",
 		SESSION_WATCH_GATE,
 		"",
-		"## Skills index (recall full content from the hub before acting)",
+		...operatorNavigationLines(),
+		"## Knowledge domains — recall before you write",
 		"",
-		"| entry | type | use when |",
-		"| --- | --- | --- |",
-		skillRows,
-		"",
-		"## Knowledge domains — RECALL_BEFORE_WRITE",
+		`Browse \`GET ${origin}/api/v1/knowledge?domain=<domain>\`, read bodies with \`GET ${origin}/api/v1/knowledge/{id}\`. Refine in place over adding new: \`/contribute-knowledge-to-cogni\`.`,
 		"",
 		"| domain | entries | about |",
 		"| --- | --- | --- |",
@@ -250,22 +211,10 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
 		"",
 		"## Work items — this node's own ledger",
 		"",
-		`Your items live in THIS node's store (\`${origin}\`) — each node owns its own \`knowledge_<slug>\` database, so there is no central ledger to fall back to. ONE work item + ONE node per session.`,
-		"",
-		`- Find work: \`GET ${origin}/api/v1/work/items?statuses=needs_implement,needs_design\` — adopt over create.`,
-		`- File one: \`POST ${origin}/api/v1/work/items\` \`{type,title,summary,outcome}\` — \`type\` ∈ task|bug|story|spike|subtask; the server allocates the id, never send one.`,
-		`- Progress: \`PATCH ${origin}/api/v1/work/items/{id}\` \`{"set":{...}}\` — the wrapper is \`set\`, NOT \`patch\`.`,
-		"- `status` ∈ needs_triage|needs_research|needs_design|needs_implement|needs_closeout|needs_merge|done|blocked|cancelled. There is no `in_progress`.",
-		'- Close with `{"set":{"status":"done"}}` only after the PR merges.',
-		`- Machine schemas for the two writes: \`GET ${origin}/.well-known/agent.json\` → \`actions.createWorkItem\` / \`actions.updateWorkItem\`.`,
-		"",
-		"## Recall + contribute",
-		"",
-		`- Browse a domain: \`GET ${origin}/api/v1/knowledge?domain=<domain>\``,
-		`- Full entry body: \`GET ${origin}/api/v1/knowledge/{id}\``,
-		`- Discovery doc: \`GET ${origin}/.well-known/agent.json\``,
-		"- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (refine in place > write new).",
-		`- Cite an existing entry in your edit: \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\` — cross-plane cites (target on main) resolve and stay valid post-merge.`,
+		`- Goal KPIs, live (NO_GOAL_PROGRESS in the bundle): \`GET ${origin}/api/v1/metrics/goals\`.`,
+		`- Top of the queue: \`GET ${origin}/api/v1/work/items?sortBy=rankScore&sortDirection=desc&limit=5&statuses=needs_triage,needs_research,needs_design,needs_design_review,needs_implement,needs_implementation_review,needs_validation,needs_closeout,needs_merge\`. Adopt over create.`,
+		`- File one: \`POST ${origin}/api/v1/work/items\` \`{type,title,summary,outcome,moves}\` — \`type\` ∈ task|bug|story|spike|subtask; the server allocates the id and pins the KPI baseline.`,
+		`- Progress: \`PATCH ${origin}/api/v1/work/items/{id}\` \`{"reason":"<why, at most 25 words>","cites":[{"id":"<atom>"}],"set":{...}}\` — \`reason\` is required and lives in history; the wrapper is \`set\`. Schemas: \`GET ${origin}/.well-known/agent.json\`.`,
 		"",
 	].join("\n");
 }

@@ -19,7 +19,7 @@
  * @public
  */
 
-import { type CatalogBoundTool, TOOL_CATALOG } from "@cogni/toks5-ai-tools";
+import { type CatalogBoundTool, TOOL_CATALOG } from "@cogni/ai-tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
 import type { CreateReactAgentGraphOptions } from "../../graphs/types";
@@ -48,16 +48,18 @@ import { toLangChainToolsFromContext } from "./tools";
  *
  * @example
  * ```typescript
- * // graphs/poet/cogni-exec.ts
- * export const poetGraph = makeCogniGraph({
- *   name: POET_GRAPH_NAME,
- *   createGraph: createPoetGraph,
- *   toolIds: POET_TOOL_IDS,
+ * // graphs/example/cogni-exec.ts
+ * export const exampleGraph = makeCogniGraph({
+ *   name: EXAMPLE_GRAPH_NAME,
+ *   createGraph: createExampleGraph,
+ *   toolIds: EXAMPLE_TOOL_IDS,
  * });
  * ```
  */
 export function makeCogniGraph<
-  TCreateGraph extends (opts: CreateReactAgentGraphOptions) => unknown,
+  TCreateGraph extends ((opts: CreateReactAgentGraphOptions) => unknown) & {
+    readonly tierModelIds?: Readonly<Record<string, string>>;
+  },
 >(opts: {
   /** Graph name (for error messages) */
   readonly name: string;
@@ -65,6 +67,8 @@ export function makeCogniGraph<
   readonly createGraph: TCreateGraph;
   /** Tool IDs this graph uses (from per-graph tools.ts) */
   readonly toolIds: readonly string[];
+  /** Trusted catalog program assignment (e.g. "cogni"); never from model/tool content. */
+  readonly program?: CreateReactAgentGraphOptions["program"];
 }): ReturnType<TCreateGraph> {
   const { name, createGraph, toolIds } = opts;
 
@@ -97,5 +101,16 @@ export function makeCogniGraph<
   });
 
   // Create graph using factory - cast preserves concrete return type
-  return createGraph({ llm, tools }) as ReturnType<TCreateGraph>;
+  return createGraph({
+    llm,
+    tierModels: {
+      main: llm,
+      ...Object.fromEntries(Object.entries(createGraph.tierModelIds ?? {}).map(([tier, model]) => {
+        if (!model.trim() || tier === "main") throw new Error("invalid_model_tier");
+        return [tier, llm.withModel(model)];
+      })),
+    },
+    tools,
+    ...(opts.program ? { program: opts.program } : {}),
+  }) as ReturnType<TCreateGraph>;
 }

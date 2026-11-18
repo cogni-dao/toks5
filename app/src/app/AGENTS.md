@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-04-27
+- **Last reviewed:** 2026-10-27
 - **Status:** draft
 
 ## Purpose
@@ -48,17 +48,20 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   - `api`: Versioned JSON APIs (v1, v2, etc.)
 - **Routes (if any):**
   - Public pages: `/` (homepage via `(public)/page.tsx`)
+  - Schedule pages: `/schedules` (active/paused configuration), `/schedules/[scheduleId]` (owned history linking to existing chat threads)
   - Development-only: `/dev/finance-preview` — actual Financials/shell fixture preview; production/test → 404; isolated disabled treasury query cache
   - Protected pages: `/chat` (via `(app)/chat/page.tsx`)
   - Infra: `/health`, `/openapi.json`, `/meta/route-manifest` (via `(infra)/*`)
-  - API: `/api/auth/*`, `/api/v1/chat/completions`
+  - API: `/api/auth/*`, `/api/v1/chat/completions`, `/api/v1/work/summaries`, `/api/v1/work/board`
   - Internal ops: `/api/internal/ops/governance/schedules/sync` [POST] (deploy-only trigger)
   - Agent discovery: `/.well-known/agent.json` [GET] — public discovery document for machine clients
 - **Files considered API:** layout.tsx, page.tsx, loading.tsx, error.tsx, api/\*\*/route.ts, (infra)/\*\*/route.ts, .well-known/\*\*/route.ts
 - **Suspense / error boundaries:** each route group exposes a
-  `loading.tsx` + `error.tsx`. `(app)/loading.tsx` renders a generic
-  fallback inside the sidebar shell; high-traffic routes
-  (`/dashboard`, `/chat`, `/work`, `/credits`, `/activity`, `/gov/*`)
+  `loading.tsx` + `error.tsx`. `(app)/loading.tsx` renders the shared
+  `BrainLoading` indicator inside the sidebar shell. `/chat` uses that same
+  indicator for route streaming and client model/credits/thread readiness;
+  its route loading boundary also covers `useSearchParams()`. Other routes
+  (`/dashboard`, `/work`, `/credits`, `/activity`, `/gov/*`)
   override with a per-route `loading.tsx` that mirrors the page's
   macro layout. `(public)/loading.tsx` renders the marketing-shaped
   skeleton (Hero + cards + feed) used by `/`; `propose/merge`
@@ -111,4 +114,6 @@ When adding new protected pages (e.g., `/billing`, `/api-keys`), place them unde
 - Uses Next.js App Router patterns
 - API routes are thin adapters that delegate to features
 
-Goals mount (story.0021): the Goals board, KPI chart and metric evidence render only from `@cogni/knowledge-base-ui/goals` (node mounts: `(app)/metrics/_components/MetricsMount.tsx` and `(app)/work/_components/WorkGoalsMount.tsx` over the one `NODE_GOALS_HOST` in `(app)/_components/goals-host.ts`: Next `Link`, one client and key prefix; `/knowledge?mode=goals` redirects to `/metrics`). The `/api/v1/metrics/*` routes keep only auth, path parameters, logging and `metricResponse`; parsing, contract validation and error mapping are `@cogni-dao/metrics/http` (`_facades/metrics.server.ts` binds its ports to the container).
+Goals, KPIs and the metrics that serve them live on the top-level Metrics page (`(app)/metrics`, nav "Metrics", story.0039); `/knowledge?mode=goals` redirects there before any read. A goal's own entry page keeps its board. `GET /api/v1/metrics/goals` and `core__goal_progress` return the same grouped read (`served`, `orphans`, `unbound`, `latest`). /api/v1/metrics exposes list, detail/history, ranged `/{id}/history` buckets, goal progress (`/goals`), exact immutable observation reads and live computation; subject projections share goal/hypothesis observation identities.
+
+Goals mount (task.0062): the Goals board, KPI chart, metric evidence and hypothesis KPI evidence render only from `@cogni/knowledge-base-ui/goals` (node mounts: `(app)/knowledge/_components/GoalsMount.tsx` for the goal entry page and evidence, `(app)/metrics/_components/MetricsMount.tsx` for the Metrics page, both over the one host in `(app)/_components/goals-host.ts`; `(app)/work/_components/WorkGoalsMount.tsx` mounts the work goal resolver (`WorkGoalsScope`: the table's Goal column, the board's goal pointer) over the same host and the dashboard wraps its work detail in the same `GoalsProvider`: Next `Link`, `?observation=`; the page shell is `(app)/metrics/{page,view}.tsx`, the whole node-local part, so extraction is mechanical). The seven `/api/v1/metrics/*` routes keep only auth, path parameters, logging and `metricResponse`; parsing, contract validation and error mapping are `@cogni-dao/metrics/http` (`_facades/metrics.server.ts` binds its ports to the container).

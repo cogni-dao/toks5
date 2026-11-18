@@ -1,58 +1,70 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+/**
+ * Module: app/api/v1/schedules/readback.server
+ * Purpose: Compose schedule readback and map its typed errors to HTTP.
+ * Scope: Delivery wiring only; no database access or authorization policy.
+ * Invariants: Unknown failures propagate; not-found does not disclose ownership.
+ * Side-effects: none
+ * Links: https://cognidao.org/work/items/task.5353
+ * @internal
+ */
 import type { EventName } from "@cogni/node-shared";
-/** Red HTTP binding: owned metadata only, no transcript reads or execution. */
-import {
-  InvalidScheduleRunCursorError,
-  ScheduleHistoryNotFoundError,
-} from "@cogni/scheduling";
+import { InvalidScheduleRunCursorError } from "@cogni/scheduler-core";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
-import { createOwnedScheduleHistory } from "@/features/scheduling/services/history";
+import {
+  createScheduleHistoryService,
+  ScheduleHistoryNotFoundError,
+} from "@/features/scheduling/services/schedule-history";
 import { logEvent, type RequestContext } from "@/shared/observability";
 
-export const scheduleReadHeaders = { "Cache-Control": "no-store, private" };
 export function scheduleReadback() {
-  return createOwnedScheduleHistory(getContainer());
+  const container = getContainer();
+  return createScheduleHistoryService({
+    schedules: container.scheduleManager,
+    reader: container.scheduleRunReader,
+  });
 }
+export const scheduleReadHeaders = { "Cache-Control": "no-store" };
 export function scheduleReadError(
   error: unknown,
   ctx: RequestContext,
   event: EventName,
   startedAt: number
 ) {
-  const status =
-    error instanceof ScheduleHistoryNotFoundError
-      ? 404
-      : error instanceof InvalidScheduleRunCursorError
-        ? 400
-        : 500;
-  logEvent(ctx.log, event, {
-    reqId: ctx.reqId,
-    routeId: ctx.routeId,
-    status,
-    outcome: "error",
-    durationMs: performance.now() - startedAt,
-    errorCode:
-      status === 404
-        ? "SCHEDULE_READ_NOT_FOUND"
-        : status === 400
-          ? "SCHEDULE_CURSOR_INVALID"
-          : "SCHEDULE_READ_FAILED",
-  });
-  if (error instanceof ScheduleHistoryNotFoundError)
+  if (error instanceof ScheduleHistoryNotFoundError) {
+    logEvent(ctx.log, event, {
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      status: 404,
+      outcome: "error",
+      errorCode: "SCHEDULE_READ_NOT_FOUND",
+      durationMs: performance.now() - startedAt,
+    });
     return NextResponse.json(
-      { error: "Schedule not found" },
-      { status, headers: scheduleReadHeaders }
+      { error: "Not found" },
+      { status: 404, headers: scheduleReadHeaders }
     );
-  if (error instanceof InvalidScheduleRunCursorError)
+  }
+  if (error instanceof InvalidScheduleRunCursorError) {
+    logEvent(ctx.log, event, {
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      status: 400,
+      outcome: "error",
+      errorCode: "SCHEDULE_CURSOR_INVALID",
+      durationMs: performance.now() - startedAt,
+    });
     return NextResponse.json(
       { error: error.message },
-      { status, headers: scheduleReadHeaders }
+      { status: 400, headers: scheduleReadHeaders }
     );
+  }
   throw error;
 }
+
 export function invalidScheduleRead(
   ctx: RequestContext,
   event: EventName,

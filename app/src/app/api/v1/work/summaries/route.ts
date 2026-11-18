@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@app/api/v1/work/summaries/route`
  * Purpose: HTTP endpoint for one bounded page of projected Work summaries.
- * Scope: Auth-protected GET. Node-local parts are auth, logging and the facade; decode, read, output validation and error mapping are the published `handleWorkSummariesRequest` (node-template task.0055, adopted task.0056).
+ * Scope: Auth-protected GET. Node-local parts are auth, logging and the facade; decode, read, output validation and error mapping are the published `handleWorkSummariesRequest` (task.0055).
  * Invariants:
  *   - VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL.
  *   - CONTRACTS_ARE_TRUTH: input is `workItemSummariesListOperation.input`, which is the published `WorkSummaryQuerySchema`; output always carries `pageInfo` (with `rowsScanned` when the store reports it).
@@ -12,7 +12,7 @@
  *   - BOUNDED_TEXT_SCAN: a text search scans at most 1000 rows; a capped page may be empty with `hasMore` and an `endCursor` (progress, not the end).
  *   - TYPED_ERRORS: invalid input or cursor → 400; backend unavailable or busy, including held native capacity (`WorkItemsCapacityError`) → 503; client abort → 499; anything else → 500.
  * Side-effects: IO (HTTP response, Doltgres or Markdown read via the facade)
- * Links: task.0056, @cogni/work-items read-handlers (handleWorkBoardRequest / handleWorkSummariesRequest), contracts/work.items.list.v1.contract
+ * Links: task.0055, packages/work-items/src/read-handlers.ts, contracts/work.items.list.v1.contract
  * @public
  */
 

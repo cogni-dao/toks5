@@ -3,14 +3,13 @@
 
 /**
  * Module: `@tests/unit/app/api/work-bounded-read-routes`
- * Purpose: Prove the bounded work read routes through the real route handlers and the real facade: board shape, input bounds, typed errors, and no page-1 Markdown merge (task.0056).
+ * Purpose: Prove the bounded work read routes through the real route handlers and the real facade: board shape, input bounds, typed errors (task.0055).
  * Scope: `/api/v1/work/board` and `/api/v1/work/summaries` GET with the container's Doltgres port stubbed; no database.
  * Invariants:
  *   - BOUNDED_BOARD: one summary read per visible status, ≤ 20 rows each, shared deadline and scan budget passed to every read.
  *   - TYPED_ERRORS: bad status, limit or cursor → 400 before any read; held native capacity → 503, never 500.
- *   - ONE_BACKEND: configured Doltgres pages never merge the unbounded Markdown list.
  * Side-effects: none
- * Links: src/app/api/v1/work/board/route.ts, src/app/api/v1/work/summaries/route.ts, src/app/_facades/work/items.server.ts, task.0056
+ * Links: src/app/api/v1/work/board/route.ts, src/app/api/v1/work/summaries/route.ts, packages/work-items/src/read-handlers.ts
  * @internal
  */
 
@@ -23,7 +22,6 @@ vi.mock("@/bootstrap/http", () => ({
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
 vi.mock("@/bootstrap/container", () => ({ getContainer: vi.fn() }));
 
-import { listWorkItems } from "@/app/_facades/work/items.server";
 import { GET as boardGET } from "@/app/api/v1/work/board/route";
 import { GET as summariesGET } from "@/app/api/v1/work/summaries/route";
 import { getContainer } from "@/bootstrap/container";
@@ -43,15 +41,13 @@ const summary = (id: string, status: string) => ({
 
 const listSummaries = vi.fn();
 const listBoardColumns = vi.fn();
-const doltList = vi.fn();
-const markdownList = vi.fn();
 const ctx = { log: { info: vi.fn() }, reqId: "req-1", routeId: "test" };
 
 function get(handler: unknown, path: string): Promise<Response> {
   return (handler as Handler)(ctx, new Request(`http://localhost${path}`));
 }
 
-describe("bounded work read routes (task.0056)", () => {
+describe("bounded work read routes (task.0055)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listSummaries.mockImplementation(async (query: { statuses?: string[] }) => {
@@ -72,8 +68,7 @@ describe("bounded work read routes (task.0056)", () => {
       }),
     );
     vi.mocked(getContainer).mockReturnValue({
-      doltgresWorkItems: { listSummaries, listBoardColumns, list: doltList },
-      workItemQuery: { list: markdownList },
+      doltgresWorkItems: { listSummaries, listBoardColumns },
     } as never);
   });
 
@@ -172,20 +167,5 @@ describe("bounded work read routes (task.0056)", () => {
       items: [{ id: "done.1" }],
       pageInfo: { endCursor: "done-next", hasMore: true, rowsScanned: 21 },
     });
-  });
-
-  it("listWorkItems page 1 reads configured Doltgres only, never the Markdown list", async () => {
-    doltList.mockResolvedValue({
-      items: [],
-      pageInfo: { endCursor: null, hasMore: false },
-    });
-    const page = await listWorkItems({ limit: 10 });
-    expect(page).toMatchObject({
-      items: [],
-      pageInfo: { endCursor: null, hasMore: false },
-    });
-    expect(doltList).toHaveBeenCalledTimes(1);
-    expect(doltList.mock.calls[0]?.[0]).toMatchObject({ limit: 10 });
-    expect(markdownList).not.toHaveBeenCalled();
   });
 });

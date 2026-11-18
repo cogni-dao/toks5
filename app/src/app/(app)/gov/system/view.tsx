@@ -7,7 +7,7 @@
  * Scope: Renders governance data fetched via React Query hooks. Does not perform server-side logic or direct DB access.
  * Invariants: Layout container owned by gov/layout.tsx; 30s polling for status, stale-while-revalidate for activity.
  * Side-effects: IO (via useGovernanceStatus hook and activity fetch)
- * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/governance-status-api.md
+ * Links: packages/node-contracts/src/governance.status.v1.contract.ts, task.5387
  * @public
  */
 
@@ -42,7 +42,7 @@ import {
 } from "@/components/kit/data-display/activity-chart-utils";
 import { useGovernanceStatus } from "@/features/governance/hooks/useGovernanceStatus";
 import { creditsToUsd } from "@/features/payments/public";
-import { fetchGovernanceActivity } from "../_api/fetchGovernanceActivity";
+import { fetchGovernanceActivity } from "./_api/fetchGovernanceActivity";
 
 export function GovernanceView(): ReactElement {
   const router = useRouter();
@@ -236,13 +236,13 @@ export function GovernanceView(): ReactElement {
 
 function Countdown({ target }: { target: Date }) {
   const [secondsLeft, setSecondsLeft] = useState(() =>
-    Math.max(0, Math.floor((target.getTime() - Date.now()) / 1000))
+    Math.max(0, Math.floor((target.getTime() - Date.now()) / 1000)),
   );
 
   useEffect(() => {
     const tick = () => {
       setSecondsLeft(
-        Math.max(0, Math.floor((target.getTime() - Date.now()) / 1000))
+        Math.max(0, Math.floor((target.getTime() - Date.now()) / 1000)),
       );
     };
     const id = setInterval(tick, 1000);
@@ -289,7 +289,7 @@ function ActivityCharts({ activity }: { activity: ActivityData }) {
         chartSeries,
         "spend",
         "Spend ($)",
-        "hsl(var(--chart-1))"
+        "hsl(var(--chart-1))",
       );
 
   const tokens = hasGrouped
@@ -298,7 +298,7 @@ function ActivityCharts({ activity }: { activity: ActivityData }) {
         chartSeries,
         "tokens",
         "Tokens",
-        "hsl(var(--chart-2))"
+        "hsl(var(--chart-2))",
       );
 
   const requests = hasGrouped
@@ -307,7 +307,7 @@ function ActivityCharts({ activity }: { activity: ActivityData }) {
         chartSeries,
         "requests",
         "Requests",
-        "hsl(var(--chart-3))"
+        "hsl(var(--chart-3))",
       );
 
   return (

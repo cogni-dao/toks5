@@ -48,12 +48,14 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
 
 - **Exports:**
   - `verifySystemTenant(serviceAccountService)` - Startup healthcheck: fails fast if cogni_system billing account missing (per SYSTEM_TENANT_STARTUP_CHECK)
-  - `startSystemTenantAssertionOnBoot(serviceAccountService)` - Native startup awaits the retained tenant qualification; failures exit 1. Inert in tests
-  - `runGovernanceSchedulesSyncJob()` - Job: advisory lock + governance schedule sync via container
-  - `createStreamRedisClient(url)` - Lazy stream Redis client with a native error listener
-  - `getContainer()` - Singleton DI container with logger and config; `scheduleRunReader` uses shared scheduling on the existing app-role `db.$client`
+  - `startSystemTenantAssertionOnBoot(serviceAccountService)` - Once-per-process boot assertion (bug.0022): native startup awaits a retained promise; missing/unreachable cogni_system logs critical and exits 1. Inert in tests
+  - `startGovernanceSyncOnBoot()` - Once-per-process bounded startup reconcile, inert in tests
+  - `runGovernanceSchedulesSyncJob({ throwIfLocked? })` - Job: advisory lock + governance schedule sync via container
+  - `localReadinessPreflight()` - Synchronous local env, secret and EVM configuration assertions
+  - `createStreamRedisClient(url)` - Lazy stream Redis client with bounded retries and safe native error handling
+  - `getContainer()` - Singleton DI container with logger and config
   - `resetContainer()` - Reset singleton (tests only)
-  - `Container` interface - Ports + logger + config (includes accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), modelCatalog, providerResolver; no usageService)
+  - `Container` interface - Ports + logger + config (includes scheduleRunReader (appDb), accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), modelCatalog, providerResolver; no usageService)
   - `ContainerConfig` interface - Runtime config (unhandledErrorPolicy, rateLimitBypass, DEPLOY_ENVIRONMENT)
   - `resolveIdentityBindingDependencies()` - Identity binding adapter/clock/randomness composition; policy remains in the feature service
   - `UnhandledErrorPolicy` type - `"rethrow" | "respond_500"`
@@ -69,7 +71,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `RateLimitBypassConfig` - Test bypass config type (from `http/wrapPublicRoute`)
   - `TokenBucketRateLimiter`, `publicApiLimiter`, `extractClientIp` - Rate limiting utilities (from `http/`)
 - **Env/Config keys:** none (uses `@/shared/env`)
-- **Files considered API:** `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
+- **Files considered API:** `agent-authority.ts` (tool authority wiring: principal lookup, wallet-bound `adminCheck`, role grant/revoke, `agent_tool.authz` log), `agent-credentials.ts` (the revocable agent key store over the service-role client), `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
 
 **Subdirectories:**
 
@@ -83,7 +85,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
 - This directory **does**:
   - Dependency injection wiring with singleton container
   - Factory functions for adapter construction and per-run executor composition (e.g., createGraphExecutor, createScopedGraphExecutor, createAgentCatalog)
-  - Sandbox provider registration (LazySandboxGraphProvider + SandboxAgentCatalogProvider, gated by LITELLM_MASTER_KEY; sandbox adapter loaded via dynamic import to avoid Turbopack bundling native deps)
+  - Sandbox provider registration (LazySandboxGraphProvider, gated by LITELLM_MASTER_KEY; executable by graph id but not listed in agent discovery; sandbox adapter loaded via dynamic import to avoid Turbopack bundling native deps)
   - Discovery factory for agent listing (listAgentsForApi per DISCOVERY_PIPELINE invariant)
   - Environment-based adapter selection (APP_ENV=test → fakes, production → real adapters including RipgrepAdapter)
   - Logger initialization (one per process)
@@ -102,6 +104,7 @@ Bootstrap application runtime dependencies.
 
 - Environment validation before startup
 - Clean dependency injection patterns
+- DENY_BY_DEFAULT (bug.0045): `http/wrapRouteHandlerWithLogging.ts` calls `bearerWriteRefusal` from `@cogni-dao/agent-grants` (the decision lives in the package) and answers 403 for a bearer write (any method but GET, HEAD, OPTIONS; any identity not `via: "session"`) with 403 `bearer_write_undeclared` unless the route declares a running `sameDoor`, a `bearerWrite` reason, or is in `OPEN_BY_DESIGN_ROUTES`. `app/tests/unit/app/bearer-write-deny-by-default.test.ts` fails on an undeclared bearer-capable write route.
 
 ## Dependencies
 
@@ -117,3 +120,6 @@ Bootstrap application runtime dependencies.
 
 - System installers moved to scripts/bootstrap/
 - Focus on runtime composition only
+
+goalMetrics composes the published measurement engine, node-owned calculator catalog and injected Postgres observation adapter. goalProgress is the one goal-progress reader (package readGoalsProgress over a knowledge-store goal source); the HTTP facade, cognition and core__goal_progress all call it.
+startMetricsSyncOnBoot activates the refresh clock after the configured container is ready, independently of governance reconciliation.

@@ -1,11 +1,20 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Bounded owned run metadata; thread authorization stays in the existing chat API. */
+/**
+ * Module: app/api/v1/schedules/[scheduleId]/runs
+ * Purpose: Read a page of owned schedule execution metadata.
+ * Scope: Auth and contract validation; delegates ownership and readback to service.
+ * Invariants: No output fanout; bounded page; no-store; no system impersonation.
+ * Side-effects: IO (database reads)
+ * Links: https://cognidao.org/work/items/task.5353
+ * @public
+ */
+import { toUserId } from "@cogni/ids";
 import {
   ScheduleParamsSchema,
   schedulesHistoryOperation,
-} from "@cogni/scheduling";
+} from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -40,24 +49,29 @@ export const GET = wrapRouteHandlerWithLogging<{
       );
     try {
       const result = await scheduleReadback().history(
-        sessionUser.id,
+        toUserId(sessionUser.id),
         params.data.scheduleId,
         {
           limit: query.data.limit,
           ...(query.data.cursor ? { cursor: query.data.cursor } : {}),
         }
       );
-      const response = schedulesHistoryOperation.output.parse(result);
+      const response = NextResponse.json(
+        schedulesHistoryOperation.output.parse(result),
+        {
+          headers: scheduleReadHeaders,
+        }
+      );
       logEvent(ctx.log, EVENT_NAMES.SCHEDULE_HISTORY_READ, {
         reqId: ctx.reqId,
-        routeId: ctx.routeId,
         status: 200,
         outcome: "success",
+        durationMs: performance.now() - startedAt,
+        routeId: "schedules.history",
         scheduleId: params.data.scheduleId,
         count: result.runs.length,
-        durationMs: performance.now() - startedAt,
       });
-      return NextResponse.json(response, { headers: scheduleReadHeaders });
+      return response;
     } catch (error) {
       return scheduleReadError(
         error,

@@ -11,11 +11,19 @@
  * @public
  */
 
-import { GOALS_BOOTSTRAP_INSTRUCTION, resolveGoals } from "@cogni/knowledge-store";
-import { describe, expect, it } from "vitest";
+import {
+	GOALS_BOOTSTRAP_INSTRUCTION,
+	resolveGoals,
+} from "@cogni/knowledge-store";
+import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
+import {
+	governingFixture,
+	GOVERNING_FIXTURE_DOMAIN,
+} from "../../../../../packages/knowledge-store/tests/fixtures/governing-index.js";
 import {
 	renderBundleMarkdown,
-	resolveOrientation,
 	SESSION_BOOTSTRAP_INVARIANTS,
 	SESSION_WATCH_GATE,
 } from "@/app/api/v1/cognition/_bundle";
@@ -34,6 +42,14 @@ const baseInput = {
 			title: "Node launch handoff",
 			entryType: "guide",
 			domain: "infrastructure",
+		},
+	],
+	governingIndex: [
+		{
+			id: "node-launch-handoff",
+			domain: "infrastructure",
+			entryType: "guide",
+			useWhen: "launch a node",
 		},
 	],
 	domainPointers: [
@@ -56,12 +72,12 @@ describe("renderBundleMarkdown", () => {
 		expect(heading).toBe("# operator — Cogni Session Cognition");
 		expect(blank).toBe("");
 		expect(subtitle).toBe(
-			"> Coordinate code, deploys, and validation for Cogni nodes. · 1 skills · 1 domains · loaded 2026-06-16 19:31"
+			"> Coordinate code, deploys, and validation for Cogni nodes. · 1 skills · 1 domains · loaded 2026-06-16 19:31",
 		);
 		expect(spacer).toBe(">");
 		expect(delivered).toContain("node `4ff8eac1-4eba-4ed0-931b-b1fe4f64713d`");
 		expect(delivered).toContain(
-			"build `f52036b33ffecdf5244662e673a0d6d174c50150`"
+			"build `f52036b33ffecdf5244662e673a0d6d174c50150`",
 		);
 		expect(heading).not.toContain("f52036b3");
 	});
@@ -69,11 +85,11 @@ describe("renderBundleMarkdown", () => {
 	it("surfaces the derived candidate (flight + validate) URL for the node", () => {
 		// operator is the primary test apex...
 		expect(renderBundleMarkdown(baseInput)).toContain(
-			"https://test.cognidao.org"
+			"https://test.cognidao.org",
 		);
 		// ...every other node is a slugged test host.
 		expect(renderBundleMarkdown({ ...baseInput, name: "poly" })).toContain(
-			"https://poly-test.cognidao.org"
+			"https://poly-test.cognidao.org",
 		);
 	});
 
@@ -95,7 +111,20 @@ describe("renderBundleMarkdown", () => {
 		expect(markdown).toContain(
 			"PATCH https://poly.cognidao.org/api/v1/work/items/{id}",
 		);
-		expect(markdown).toContain('{"set":{...}}');
+		expect(markdown).toContain(
+			'{"reason":"<why, at most 25 words>","cites":[{"id":"<atom>"}],"set":{...}}',
+		);
+		expect(markdown).toContain(
+			"GET https://poly.cognidao.org/api/v1/work/items?sortBy=rankScore&sortDirection=desc&limit=5",
+		);
+	});
+
+	it("leads the invariants with grounding in node knowledge", () => {
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toMatch(/^GROUND\. Never act on intuition\./);
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("node-template-architect");
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("write or refine that guide first");
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("goals, their KPIs");
+		expect(SESSION_BOOTSTRAP_INVARIANTS[1]).toContain("names the KPI it moves");
 	});
 
 	it("renders the current-node orientation entry IN FULL above the tooling invariants", () => {
@@ -126,7 +155,7 @@ describe("renderBundleMarkdown", () => {
 		expect(markdown).not.toContain("for the full context");
 		// Map comes before the constitution.
 		expect(markdown.indexOf("## Orientation — recall this first")).toBeLessThan(
-			markdown.indexOf("## Tooling invariants")
+			markdown.indexOf("## Tooling invariants"),
 		);
 	});
 
@@ -176,7 +205,7 @@ describe("renderBundleMarkdown", () => {
 
 	it("keeps the CICD-sequence invariant free of the watch mechanics it delegates", () => {
 		const cicd = SESSION_BOOTSTRAP_INVARIANTS.find((line) =>
-			line.startsWith("Ship via PR")
+			line.startsWith("Ship via PR"),
 		);
 		// The step order lives in the invariant; the *how to watch* lives in the
 		// <watch-gate> block. The invariant points at it, never duplicates the cmd.
@@ -193,88 +222,34 @@ describe("renderBundleMarkdown", () => {
 	});
 });
 
-describe("bundle growth — large indexes render whole, no serve-side ceiling (story.5070)", () => {
-	// The hub is designed to accumulate: every new skill/guide/playbook adds a row.
-	// Delivery is now uncapped on both runtimes (Codex raw stdout with spill off;
-	// Claude Code structured additionalContext), so the producer no longer enforces
-	// a byte ceiling. The former 16 KB cap (bug.5284) would have rejected this shape
-	// at the source and 500'd /api/v1/cognition; growth must now render whole.
-	function indexOf(rows: number, titleLen: number) {
-		return Array.from({ length: rows }, (_, i) => ({
+describe("no flat governing index in the Markdown (story.0044)", () => {
+	it("keeps the code-owned frame small enough to leave room for the orientation", () => {
+		const frame = renderBundleMarkdown({ ...baseInput, orientation: null });
+		expect(new TextEncoder().encode(frame).byteLength).toBeLessThan(8 * 1024);
+	});
+
+	it("routes by domains and the architect instead of listing governing rows", () => {
+		const rows = Array.from({ length: 80 }, (_, i) => ({
 			id: `build-compute-entry-${i}`,
-			// A realistic worst-case row: the title carries the bulk of the bytes,
-			// the one field this node's render inlines per skill.
-			title: `Build/compute runtime knowledge entry ${i} — ${"detail ".repeat(titleLen)}`,
+			useWhen: `Build/compute runtime knowledge entry ${i}`,
 			entryType: "guide",
 			domain: "infrastructure",
 		}));
-	}
-
-	it("renders a bundle well past the former 16 KB cap, whole and untruncated", () => {
-		const md = renderBundleMarkdown({
-			...baseInput,
-			skillsIndex: indexOf(80, 40),
-		});
-		const bytes = new TextEncoder().encode(
-			`${md.replace(/\n+$/, "")}\n`
-		).byteLength;
-		// Past the old ceiling — which would have thrown here.
-		expect(bytes).toBeGreaterThan(16 * 1024);
-		// The last row is present ⇒ nothing was dropped.
-		expect(md).toContain("build-compute-entry-79");
-	});
-});
-
-describe("resolveOrientation", () => {
-	const port = (rows: Record<string, string>) => ({
-		getKnowledge: async (id: string) =>
-			id in rows ? { id, content: rows[id] } : null,
-	});
-
-	it("finds the exact-id entry even when the domain scan missed it (bug.5280)", async () => {
-		// Repro: domain outgrew PER_DOMAIN_LIMIT, so the scan never saw the old
-		// orientation row and passed scannedOrientationId=null. Direct lookup
-		// must still resolve it.
-		const result = await resolveOrientation(
-			port({ "operator-agent-orientation": "the map" }),
-			"operator-agent-orientation",
-			null
-		);
-		expect(result).toEqual({
-			id: "operator-agent-orientation",
-			content: "the map",
-		});
-	});
-
-	it("falls back to the scan-found suffix entry when the exact id is absent", async () => {
-		const result = await resolveOrientation(
-			port({ "legacy-agent-orientation": "older map" }),
-			"operator-agent-orientation",
-			"legacy-agent-orientation"
-		);
-		expect(result?.id).toBe("legacy-agent-orientation");
-	});
-
-	it("falls back to the generic starter seed last, else null", async () => {
-		const seeded = await resolveOrientation(
-			port({ "cogni-agent-orientation": "starter" }),
-			"operator-agent-orientation",
-			null
-		);
-		expect(seeded?.id).toBe("cogni-agent-orientation");
-
-		const empty = await resolveOrientation(
-			port({}),
-			"operator-agent-orientation",
-			null
-		);
-		expect(empty).toBeNull();
+		const md = renderBundleMarkdown({ ...baseInput, governingIndex: rows });
+		expect(md).not.toContain("build-compute-entry-");
+		expect(md).not.toContain("## Governing index");
+		expect(md).toContain("## Knowledge domains");
 	});
 });
 
 describe("Goals section — approved goals right after the orientation (story.5101)", () => {
 	const port = (
-		goals: { id: string; title: string; content: string; evaluateAt: Date | null }[],
+		goals: {
+			id: string;
+			title: string;
+			content: string;
+			evaluateAt: Date | null;
+		}[],
 	) => ({ listActiveGoals: async () => goals });
 
 	it("zero goals renders `no approved goals` plus the bootstrap instruction", async () => {
@@ -310,3 +285,307 @@ describe("Goals section — approved goals right after the orientation (story.51
 		expect(at("## Goals")).toBeLessThan(at("## Tooling invariants"));
 	});
 });
+
+describe("static platform discovery beside node-owned cognition (task.5309)", () => {
+	it("routes an empty fresh hub to canonical trace/eval authorities without copying bodies", () => {
+		const markdown = renderBundleMarkdown({
+			...baseInput,
+			name: "fresh-node",
+			origin: "https://fresh-node.cognidao.org",
+			skillsIndex: [],
+			domainPointers: [],
+			governingIndex: [],
+		});
+		for (const id of [
+			"node-ai-traces-read",
+			"agent-evaluation-loop",
+			"langfuse-eval-expert",
+		])
+			expect(markdown).toContain(`\`${id}\``);
+		expect(markdown).toContain("GET https://cognidao.org/api/v1/knowledge/{id}");
+		for (const shelf of [
+			"use-access",
+			"use-ship",
+			"use-operate",
+			"use-govern",
+			"method",
+			"build-agents",
+			"build-health",
+		])
+			expect(markdown).toContain(shelf);
+		expect(markdown).toContain("COGNI_OPERATOR_NODE_API_KEY");
+		expect(markdown).toContain("COGNI_OPERATOR_API_KEY");
+		expect(markdown).toContain("COGNI_NODE_API_KEY");
+		expect(markdown).toContain("/api/v1/agent/me");
+		expect(markdown).toContain("node.flight");
+		expect(markdown).toContain("fresh-node");
+		expect(markdown).not.toContain("Basic ");
+	});
+});
+
+const composition = vi.hoisted(() => ({ port: undefined as unknown }));
+vi.mock("@/bootstrap/container", () => ({
+	getContainer: () => ({
+		nodeId: "fresh-uuid",
+		knowledgeStorePort: composition.port,
+	}),
+}));
+vi.mock("@/bootstrap/http", () => ({
+	wrapRouteHandlerWithLogging: (_options: unknown, handler: unknown) => handler,
+}));
+vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
+vi.mock("@/shared/config", () => ({
+	getNodeName: () => "fresh-node",
+	getNodeMission: () => "Node-owned mission",
+}));
+vi.mock("@/shared/env", () => ({
+	serverEnv: () => ({ APP_BUILD_SHA: "fixture-sha" }),
+}));
+
+it("follows the served oversized same-cognition index beyond 1,000 newer rows with exact trigger hashes and preserved mandatory bytes", async () => {
+	const { rows, edges } = governingFixture();
+	const store = new FakeKnowledgeStoreAdapter();
+	await store.registerDomain({ id: GOVERNING_FIXTURE_DOMAIN, name: "Fixture" });
+	await store.registerDomain({ id: "method", name: "Method" });
+	vi.useFakeTimers();
+	try {
+		await store.withWrite(
+			{ operationId: "governing-cognition", message: "fixture" },
+			async (write) => {
+				for (const row of rows) {
+					vi.setSystemTime(row.createdAt);
+					await write.addKnowledge(row);
+				}
+				for (const edge of edges) await write.addCitation(edge);
+			},
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+	const digest = (value: unknown) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	const bodySnapshot = async () =>
+		Promise.all(rows.map((r) => store.getKnowledge(r.id)));
+	const before = digest(await bodySnapshot());
+	const commits = store.commitLog.length;
+	const orientationRow = await store.getKnowledge(
+		"fresh-node-agent-orientation",
+	);
+	if (!orientationRow) throw new Error("Missing fixture orientation");
+	const orientation = orientationRow.content;
+	const goal = {
+		id: "goal-local",
+		title: "Approved local goal",
+		content: "LOCAL GOAL BYTES",
+		evaluateAt: null,
+	};
+	const expected = await store.listGoverningIndex();
+	const list = vi.fn(() => store.listGoverningIndex());
+	composition.port = {
+		currentCommit: () => store.currentCommit(),
+		listDomainsFull: () => store.listDomainsFull(),
+		listGoverningIndex: list,
+		getKnowledge: (id: string) => store.getKnowledge(id),
+		listActiveGoals: async () => [goal],
+	};
+	const fetcher = vi.fn(() => {
+		throw new Error("operator boot fetch forbidden");
+	});
+	vi.stubGlobal("fetch", fetcher);
+	vi.stubEnv("COGNI_OPERATOR_NODE_API_KEY", "private-canonical-sentinel");
+	vi.stubEnv("COGNI_OPERATOR_API_KEY", "private-legacy-sentinel");
+	try {
+		const { GET } = await import("@/app/api/v1/cognition/route");
+		const handler = GET as unknown as (...args: unknown[]) => Promise<Response>;
+		const request = async (url: string) => {
+			const response = await handler(
+				{ log: { info: vi.fn(), warn: vi.fn() } },
+				new Request(url),
+				{ id: "own-agent" },
+			);
+			expect(response.headers.get("cache-control")).toContain("private");
+			return response.json();
+		};
+		const first = await request(
+			"https://fresh-node.cognidao.org/api/v1/cognition",
+		);
+		// The Markdown lists no governing rows; the JSON keeps the complete array.
+		expect(first.markdown).not.toContain("## Governing index");
+		expect(first.markdown).not.toContain(
+			"https://fresh-node.cognidao.org/api/v1/knowledge/index",
+		);
+		const followed = first;
+		// Follow only the delivered complete array; the shared query has already selected membership.
+		const selected = followed.governingIndex.filter(
+			(r: { domain: string }) => r.domain === GOVERNING_FIXTURE_DOMAIN,
+		);
+		const expectedShelf = expected.filter(
+			(r) => r.domain === GOVERNING_FIXTURE_DOMAIN,
+		);
+		expect(selected).toEqual(expectedShelf);
+		expect(digest(selected)).toBe(digest(expectedShelf));
+		expect(digest(followed.governingIndex)).toBe(digest(expected));
+		expect(selected.some((r: { id: string }) => r.id === "gov-old-rule")).toBe(
+			true,
+		);
+		expect(
+			new Set(selected.map((r: { entryType: string }) => r.entryType)).size,
+		).toBe(7);
+		expect(
+			selected.some((r: { id: string }) =>
+				["gov-blank", "gov-null", "gov-retired", "gov-evidence"].includes(r.id),
+			),
+		).toBe(false);
+		expect(first.skillsIndex).toHaveLength(expected.length);
+		expect(first.skillsIndex[0]).toHaveProperty("title");
+		for (const mandatory of [
+			orientation,
+			goal.content,
+			"Node-owned mission",
+			...SESSION_BOOTSTRAP_INVARIANTS,
+		]) {
+			for (const served of [first, followed]) {
+				const start = served.markdown.indexOf(mandatory);
+				expect(start).toBeGreaterThanOrEqual(0);
+				expect(
+					digest(served.markdown.slice(start, start + mandatory.length)),
+				).toBe(digest(mandatory));
+			}
+		}
+		expect(first.markdown).toContain("node-ai-traces-read");
+		expect(first.markdown).toContain("agent-evaluation-loop");
+		expect(first.markdown).toContain("langfuse-eval-expert");
+		expect(digest(await bodySnapshot())).toBe(before);
+		expect(store.commitLog).toHaveLength(commits);
+		expect(JSON.stringify(first)).not.toContain("private-canonical-sentinel");
+		expect(JSON.stringify(first)).not.toContain("private-legacy-sentinel");
+		expect(fetcher).not.toHaveBeenCalled();
+		const raw = (headers: HeadersInit = {}) =>
+			handler(
+				{ log: { info: vi.fn(), warn: vi.fn() } },
+				new Request("https://fresh-node.cognidao.org/api/v1/cognition", {
+					headers,
+				}),
+				{ id: "own-agent" },
+			);
+		const etag = (await raw()).headers.get("etag");
+		expect(etag).toMatch(/^W\/"/);
+		const revalidated = await raw({ "if-none-match": etag ?? "" });
+		expect(revalidated.status).toBe(304);
+		expect(revalidated.headers.get("server-timing")).toMatch(
+			/^hub;dur=[\d.]+;desc="memo", total;dur=[\d.]+$/,
+		);
+		expect(await revalidated.text()).toBe("");
+		// Every request at the same store revision is served from the memo.
+		expect(list).toHaveBeenCalledTimes(1);
+	} finally {
+		vi.unstubAllGlobals();
+		vi.unstubAllEnvs();
+	}
+});
+
+it("serves mandatory local cognition intact, however large", async () => {
+	const content = "MANDATORY ".repeat(8000);
+	const markdown = renderBundleMarkdown({
+		...baseInput,
+		orientation: { id: "custom", content },
+	});
+	expect(markdown).toContain(content);
+	expect(markdown).toContain("node-ai-traces-read");
+});
+
+it("serves a degraded bundle visibly with no ETag and no-store, and a hubless bundle the same", async () => {
+	const { GET } = await import("@/app/api/v1/cognition/route");
+	const handler = GET as unknown as (...args: unknown[]) => Promise<Response>;
+	const call = () =>
+		handler(
+			{ log: { info: vi.fn(), warn: vi.fn() } },
+			new Request("https://fresh-node.cognidao.org/api/v1/cognition", {
+				headers: { "if-none-match": "*" },
+			}),
+			{ id: "own-agent" },
+		);
+	composition.port = {
+		currentCommit: async () => "rev-degraded",
+		listDomainsFull: async () => [],
+		listGoverningIndex: async () => [],
+		getKnowledge: async () => null,
+		listActiveGoals: async () => {
+			throw new Error("goals down");
+		},
+	};
+	const degraded = await call();
+	expect(degraded.status).toBe(200);
+	expect(degraded.headers.get("etag")).toBeNull();
+	expect(degraded.headers.get("cache-control")).toBe("no-store");
+	expect((await degraded.json()).markdown).toContain("goals unavailable");
+
+	composition.port = undefined;
+	const hubless = await call();
+	expect(hubless.status).toBe(200);
+	expect(hubless.headers.get("etag")).toBeNull();
+	expect((await hubless.json()).markdown).toContain(
+		SESSION_BOOTSTRAP_INVARIANTS[0],
+	);
+});
+
+describe("cognition route budgets and revalidation (bug.0018)", () => {
+	const call = async (headers: HeadersInit = {}, user: unknown = { id: "agent" }) => {
+		const { GET } = await import("@/app/api/v1/cognition/route");
+		const handler = GET as unknown as (...args: unknown[]) => Promise<Response>;
+		return handler(
+			{ log: { info: vi.fn(), warn: vi.fn() } },
+			new Request("https://fresh-node.cognidao.org/api/v1/cognition", {
+				headers,
+			}),
+			user,
+		);
+	};
+	const hub = (head: () => Promise<string>) => ({
+		currentCommit: vi.fn(head),
+		listDomainsFull: async () => [],
+		listGoverningIndex: async () => [],
+		getKnowledge: async () => null,
+		listActiveGoals: async () => [],
+	});
+
+	it("answers 401 before touching the hub", async () => {
+		const port = hub(async () => "rev-a");
+		composition.port = port;
+		const response = await call({}, null);
+		expect(response.status).toBe(401);
+		expect(port.currentCommit).not.toHaveBeenCalled();
+	});
+
+	it("never confirms a stale bundle with 304: 200, no ETag, no-store", async () => {
+		let head: () => Promise<string> = async () => "rev-a";
+		composition.port = hub(() => head());
+		const first = await call();
+		const etag = first.headers.get("etag");
+		expect(etag).toMatch(/^W\//);
+		head = async () => {
+			throw new Error("dolt busy");
+		};
+		const stale = await call({ "if-none-match": etag ?? "" });
+		expect(stale.status).toBe(200);
+		expect(stale.headers.get("etag")).toBeNull();
+		expect(stale.headers.get("cache-control")).toBe("no-store");
+		expect(stale.headers.get("server-timing")).toContain(
+			'desc="stale head_failed"',
+		);
+	});
+
+	it("answers a retryable 503 when nothing complete can be read", async () => {
+		composition.port = hub(async () => {
+			throw new Error("dolt down");
+		});
+		const response = await call();
+		expect(response.status).toBe(503);
+		expect(response.headers.get("retry-after")).toBe("1");
+		expect(await response.json()).toEqual({
+			error: "cognition_unavailable",
+			retryable: true,
+		});
+	});
+});
+

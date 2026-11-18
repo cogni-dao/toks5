@@ -21,7 +21,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Stub sidebar shell so this test stays scoped to the layout behavior
-vi.mock("@/components", () => ({
+vi.mock("@/components/startup", () => ({
   SidebarProvider: ({ children }: { children?: ReactNode }) => (
     <div data-testid="sidebar-provider">{children}</div>
   ),
@@ -30,8 +30,11 @@ vi.mock("@/components", () => ({
   ),
 }));
 
-vi.mock("@/features/layout", () => ({
+vi.mock("@/features/layout/components/AppSidebar", () => ({
   AppSidebar: () => <div data-testid="app-sidebar" />,
+}));
+
+vi.mock("@/features/layout/components/AppTopBar", () => ({
   AppTopBar: () => <div data-testid="app-topbar" />,
 }));
 

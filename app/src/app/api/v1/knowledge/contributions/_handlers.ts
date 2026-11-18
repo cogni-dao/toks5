@@ -1,3 +1,5 @@
+import { calculatorShape } from "@cogni-dao/metrics";
+import { displayFits, KpiBindingsSchema, StoredMetricSpecSchema } from "@cogni-dao/metrics/contracts";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -7,21 +9,16 @@
  *   Pulls the framework-agnostic ContributionService from the container, maps
  *   SessionUser → Principal, and translates typed service errors to HTTP statuses.
  * Scope: Operator-side wiring only. Mirrors poly's identical handler set.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION,
- *   GOAL_CHANGE_IS_NODE_ADMIN (story.5101): a merge whose diff touches a `goal-*` row (or a
- *   goal-retiring edge) additionally requires node admin — enforced in ContributionService.merge
- *   on raw diff ids at the gated head; mapped here to 403 `authz_denied` / 503 `authz_unavailable`.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, ONE_ADMIN_CHECK (any credential),
+ *   MERGE_IS_NODE_ADMIN (bug.0044, subsumes story.5101 GOAL_CHANGE_IS_NODE_ADMIN): every first
+ *   merge, and a close of another principal's contribution, requires node admin — enforced in
+ *   ContributionService (merge also gates raw diff ids at the head); mapped here to 403
+ *   `authz_denied` / 503 `authz_unavailable`.
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
  * Links: https://node-template.cognidao.org/knowledge/knowledge-contribution-flow, packages/knowledge-store
  * @internal
  */
 
-import { calculatorShape } from "@cogni-dao/metrics";
-import {
-  displayFits,
-  KpiBindingsSchema,
-  StoredMetricSpecSchema,
-} from "@cogni-dao/metrics/contracts";
 import {
   CitationTargetNotFoundError,
   CitationTypeMismatchError,
@@ -35,9 +32,12 @@ import {
   HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   KnowledgeGateError,
+  KnowledgeWriteConflictError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
   NodeAdminRequiredError,
   type PrincipalAuthSource,
-  sessionUserToPrincipal,
+  sessionUserToPrincipal
 } from "@cogni/knowledge-store";
 import {
   ContributionAppendCommitRequestSchema,
@@ -71,6 +71,37 @@ function authSource(request: Request): PrincipalAuthSource {
 }
 
 function mapError(e: unknown): NextResponse {
+  if (e instanceof KnowledgeWriteOutcomeUnknownError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.code,
+        retryable: false,
+        operationId: e.operationId,
+        branch: e.branch,
+        commitHash: e.commitHash ?? null,
+      },
+      { status: 409 }
+    );
+  if (e instanceof KnowledgeWriteScopeRequiredError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: "knowledge_write_scope_required",
+        retryable: false,
+      },
+      { status: 500 }
+    );
+  if (e instanceof KnowledgeWriteConflictError)
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.receipt.code,
+        retryable: false,
+        entryId: e.entryId,
+      },
+      { status: 409 }
+    );
   // Admission control refused, reserved, or lock-contended: nothing was
   // applied, so this is retryable capacity pressure, never a client conflict.
   // 409 here would tell an agent its write was rejected on the merits.
@@ -91,9 +122,9 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 429 });
   if (e instanceof DomainNotRegisteredError)
     return NextResponse.json({ error: e.message }, { status: 400 });
-  if (e instanceof EmptyKnowledgePatchError)
-    return NextResponse.json({ error: e.message }, { status: 400 });
-  // GOAL_CHANGE_IS_NODE_ADMIN — refused before any side effect.
+  // MERGE_IS_NODE_ADMIN — the service refused a merge, or a close of another's
+  // inbox, before any side effect: 403 authz_denied, or 503 authz_unavailable when no
+  // node-admin authority is wired.
   if (e instanceof NodeAdminRequiredError)
     return NextResponse.json(
       { error: e.message, errorCode: e.errorCode, action: e.action },
@@ -102,9 +133,11 @@ function mapError(e: unknown): NextResponse {
   // HYPOTHESIS_HAS_EVALUATE_AT — a hypothesis or goal write without evaluateAt.
   if (e instanceof HypothesisMissingEvaluateAtError)
     return NextResponse.json({ error: e.message }, { status: 400 });
+  if (e instanceof EmptyKnowledgePatchError)
+    return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or
-  // whose edge type doesn't match the cited entry_type, is a client error â
-  // never a 500 (bug.5024). The cross-plane (main âª branch) resolution lives in
+  // whose edge type doesn't match the cited entry_type, is a client error.
+  // Never a 500 (bug.5024). The cross-plane (main or branch) resolution lives in
   // the adapter; these map the genuinely-absent / mistyped cases to typed 4xx.
   if (e instanceof CitationTargetNotFoundError)
     return NextResponse.json(
@@ -377,8 +410,8 @@ export async function handleMerge(
 
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   try {
-    // GOAL_CHANGE_IS_NODE_ADMIN is enforced inside ContributionService.merge
-    // (raw diff ids + expected head); this passes the acting wallet.
+    // MERGE_IS_NODE_ADMIN is enforced inside ContributionService.merge
+    // (before the raw-diff gate and expected head); this passes the acting wallet.
     const result = await svc.merge({
       principal,
       contributionId,
@@ -441,6 +474,10 @@ export async function handleClose(
     await svc.close({
       principal,
       contributionId,
+      actor: {
+        userId: sessionUser.id,
+        walletAddress: sessionUser.walletAddress ?? null,
+      },
       reason: parsed.data.reason,
     });
     return NextResponse.json({ contributionId, closed: true });
@@ -449,39 +486,41 @@ export async function handleClose(
   }
 }
 
-/** A stored metric spec must parse strictly, name a registered calculator and carry a display its unit can honour. */
-function validateMetricSpec(
-  stored: unknown,
-  id: string,
-  title: string
-): NextResponse | null {
+/**
+ * A stored metric spec must parse strictly. The core spec names a registered calculator and
+ * carries a display its unit can honour; `serves`, `band` and `brief` are validated by their own
+ * schemas (a malformed one is a 400 here, at authoring) and never reach the strict MetricSpecSchema.
+ * A written spec must carry its five-second `brief` (metric-foundation-design "Metric brief").
+ */
+export function validateMetricSpec(stored: unknown, id: string, title: string): NextResponse | null {
+  // Each rejection logs one event with its reason and issue paths, never the stored values.
+  const reject = (status: 400 | 422, reason: string, body: Record<string, unknown>, issues?: readonly string[]) => {
+    getContainer().log.warn({ metricId: id, reason, ...(issues ? { issues } : {}) }, "knowledge.contributions.metric_spec_rejected");
+    return NextResponse.json(body, { status });
+  };
   const parsed = StoredMetricSpecSchema.safeParse(stored);
   if (!parsed.success)
-    return NextResponse.json(
+    return reject(
+      400,
+      "invalid_definition",
       { error: "invalid metric definition", issues: parsed.error.issues },
-      { status: 400 }
+      parsed.error.issues.map((i) => `${i.path.join(".")}:${i.code}`),
     );
-  const { display, ...spec } = parsed.data;
+  const { display, serves: _serves, band, brief, ...spec } = parsed.data;
+  if (!brief)
+    return reject(400, "brief_missing", {
+      error: "metric definition needs a brief: {summary, justification}, one sentence of at most 25 words each",
+    });
   const registry = getContainer().goalMetrics?.registry;
   try {
     registry?.validate({ id, title, revision: "proposed", spec });
   } catch {
-    return NextResponse.json(
-      { error: "unsupported calculator or parameters" },
-      { status: 422 }
-    );
+    return reject(422, "unsupported_calculator", { error: "unsupported calculator or parameters" });
   }
-  if (
-    display &&
-    registry &&
-    !displayFits(
-      display,
-      calculatorShape(registry.get(spec.calculatorId), spec.params).unit
-    )
-  )
-    return NextResponse.json(
-      { error: "display does not fit the metric unit (slo needs %)" },
-      { status: 422 }
-    );
+  const unit = registry ? calculatorShape(registry.get(spec.calculatorId), spec.params).unit : null;
+  if (display && unit !== null && !displayFits(display, unit))
+    return reject(422, "display_unit_mismatch", { error: "display does not fit the metric unit (slo needs %)" });
+  if (band && unit !== null && band.target.unit !== unit)
+    return reject(422, "band_unit_mismatch", { error: `band target unit must match the metric unit (${unit})` });
   return null;
 }

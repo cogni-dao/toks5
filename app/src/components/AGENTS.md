@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-10-26
+- **Last reviewed:** 2026-11-08
 - **Status:** draft
 
 ## Purpose
@@ -38,8 +38,8 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Public Surface
 
-- **Exports:** UI components and widgets via `components/index.ts`
-- **Files considered API:** `index.ts`, `kit/*/index.tsx`
+- **Exports:** UI components and widgets via `components/index.ts`; shell primitives via `components/startup.ts`; Sheet primitives via `components/sheet.ts`; chart primitives via `components/chart.ts`
+- **Files considered API:** `index.ts`, `startup.ts`, `sheet.ts`, `chart.ts`, `kit/*/index.tsx`
 
 ## Responsibilities
 
@@ -48,7 +48,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Usage
 
-**IMPORTANT: If you are making any changes to files in this directory, you must read:** [`https://node-template.cognidao.org/knowledge/frontend-development`](https://node-template.cognidao.org/knowledge/frontend-development)
+**IMPORTANT: If you are making any changes to files in this directory, you must read:** [frontend-development](https://node-template.cognidao.org/knowledge/frontend-development)
 
 Minimal local commands:
 
@@ -101,4 +101,4 @@ src/components/
 
 - Promotion policy: colocate → second consumer → promote. Keep root lean.
 - Each file: short header with Purpose, Scope, Invariants. No inline commentary drift.
-- Implementation workflows live in `https://node-template.cognidao.org/knowledge/frontend-development`.
+- Implementation workflows live in [frontend-development](https://node-template.cognidao.org/knowledge/frontend-development).

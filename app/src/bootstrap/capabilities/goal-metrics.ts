@@ -1,20 +1,112 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /**
- * Node composition. The calculators, budgets, source allow-list and metric
- * tools are published in @cogni-dao/metrics and @cogni-dao/ai-tools; this
- * node binds its own id and its one goal-progress reader.
+ * Node composition. The calculators, budgets and source allow-list are
+ * published in @cogni-dao/metrics/knowledge; this node binds its own id and
+ * registers node-local calculators over sources only this node owns.
  */
-import { createMetricTools } from "@cogni/shared-ai-tools";
-import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
+import type { MetricCalculator } from "@cogni-dao/metrics/contracts";
 import {
 	createGoalMetrics as createPublishedGoalMetrics,
 	createGoalProgressReader,
 	createGoalSource,
 } from "@cogni-dao/metrics/knowledge";
 import type { Sql } from "postgres";
+import { z } from "zod";
+import {
+	WORK_AUTHOR_CLASSES,
+	readValidatedByAuthor,
+} from "@/adapters/server/metrics/ledger.source";
+import {
+	RUN_CALLER_CLASSES,
+	readRunsByCaller,
+} from "@/adapters/server/metrics/runs.source";
 import { getNodeId } from "@/shared/config";
 
 export { createGoalProgressReader, createGoalSource };
+
+const runsParams = z.strictObject({
+	class: z.enum(RUN_CALLER_CLASSES),
+	mode: z.enum(["count", "share"]),
+	days: z.number().int().min(1).max(28),
+});
+
+/**
+ * Node-local calculator over this node's own graph_runs ledger.
+ * Design: https://node-template.cognidao.org/knowledge/usage-metrics-design
+ */
+function createRunsCountCalculator(observationsSql: Sql): MetricCalculator {
+	return {
+		id: "runs.count@1",
+		// Window edges are started_at event times inside [end - days, end).
+		historicalWindows: true,
+		unit: "runs",
+		unitFor: (params) =>
+			runsParams.parse(params).mode === "share" ? "ratio" : "runs",
+		display: "volume",
+		displayFor: (params) =>
+			runsParams.parse(params).mode === "share" ? "progress" : "volume",
+		windowSeconds: (params) => runsParams.parse(params).days * 86400,
+		paramsSchema: runsParams,
+		budget: {
+			timeoutMs: 8000,
+			maxSourceCalls: 1,
+			maxRows: 1,
+			maxResponseBytes: 65536,
+		},
+		compute: async (params, ctx) => {
+			const parsed = runsParams.parse(params);
+			return ctx.read((signal) =>
+				readRunsByCaller(observationsSql, parsed, ctx.window, signal),
+			);
+		},
+	};
+}
+
+const ledgerParams = z.strictObject({
+	author: z.enum(WORK_AUTHOR_CLASSES),
+	mode: z.enum(["count", "share"]),
+	days: z.number().int().min(1).max(28),
+});
+
+/**
+ * Node-local calculator over this node's work ledger: validated items by
+ * work-author class. Design: hub work-author + validated-work-by-author.
+ */
+function createValidatedByAuthorCalculator(
+	knowledgeSql: Sql,
+	observationsSql: Sql,
+): MetricCalculator {
+	return {
+		id: "ledger.validated-by-author@1",
+		// Window edges are validation-commit times inside [end - days, end).
+		historicalWindows: true,
+		unit: "items",
+		unitFor: (params) =>
+			ledgerParams.parse(params).mode === "share" ? "ratio" : "items",
+		display: "volume",
+		displayFor: (params) =>
+			ledgerParams.parse(params).mode === "share" ? "progress" : "volume",
+		windowSeconds: (params) => ledgerParams.parse(params).days * 86400,
+		paramsSchema: ledgerParams,
+		// Clock (1) + internal principals (1) + validated window (1) + authors (1).
+		budget: {
+			timeoutMs: 8000,
+			maxSourceCalls: 4,
+			maxRows: 500,
+			maxResponseBytes: 262144,
+		},
+		compute: async (params, ctx) => {
+			const parsed = ledgerParams.parse(params);
+			return readValidatedByAuthor(
+				knowledgeSql,
+				observationsSql,
+				parsed,
+				ctx.window,
+				(source) => ctx.read((signal) => source(signal)),
+			);
+		},
+	};
+}
 
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
@@ -22,13 +114,12 @@ export function createGoalMetrics(deps: {
 	environment: string;
 	log(event: object): void;
 }) {
-	return createPublishedGoalMetrics({ ...deps, node: getNodeId() });
-}
-
-/** Inject the node's one goal-progress reader so the route and tool share it. */
-export function createGoalMetricTools(deps: {
-	metrics: () => MetricService | undefined;
-	goalProgress: () => Promise<GoalsProgress>;
-}) {
-	return createMetricTools(deps.metrics, { goalProgress: deps.goalProgress });
+	return createPublishedGoalMetrics({
+		...deps,
+		node: getNodeId(),
+		nodeCalculators: [
+			createRunsCountCalculator(deps.observationsSql),
+			createValidatedByAuthorCalculator(deps.knowledgeSql, deps.observationsSql),
+		],
+	});
 }

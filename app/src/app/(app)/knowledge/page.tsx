@@ -2,19 +2,12 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@app/(app)/knowledge/page`
- * Purpose: Knowledge dashboard page shell — auth check + server-side data read
- *   that seeds React Query `initialData` so the first HTML paint shows the real
- *   entry count + table (never a false "0 entries"), not a cold client fetch.
- * Scope: Server component. Auth check + parallel port reads via shared loaders
- *   (house SSR idiom, see `(app)/nodes/page.tsx`); the client view owns
- *   interaction, refetch, and mutations.
- * Invariants: Protected route (server-side auth check); SSR_SEEDS_REACT_QUERY
- *   (loaders return the exact wire shape the client fetchers do, so
- *   initialData === post-hydration refetch — no hydration shift). Graph data is
- *   only pre-read on a `?mode=graph` deep-link; otherwise it stays deferred.
- * Side-effects: IO (Doltgres reads via container port)
- * Links: [KnowledgeDashboardView](./view.tsx), ./_server/loaders.ts, https://node-template.cognidao.org/knowledge/knowledge-write-contract
+ * Authenticated dashboard shell. Seeds only the active tab with its canonical
+ * wire response. Browse reads one bounded metadata window (with its exact
+ * total), with no domain, legacy list, graph or Inbox reads. Graph is not
+ * seeded: the client reads the whole corpus once per revision (ETag/304). Other
+ * tabs retain their loaders. `?mode=goals` redirects to `/metrics` (story.0039), so old
+ * deep links keep working.
  * @public
  */
 
@@ -24,8 +17,8 @@ import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
   loadDomains,
-  loadKnowledgeGraph,
-  loadKnowledgeList,
+  loadKnowledgeBrowse,
+  loadKnowledgeListCached,
 } from "./_server/loaders";
 import { KnowledgeDashboardView } from "./view";
 
@@ -54,20 +47,22 @@ export default async function KnowledgePage({
 
   const port = getContainer().knowledgeStorePort;
   const { mode } = await searchParams;
-
   // The Goals tab became the top-level Metrics page; keep old links working.
   if (mode === "goals") {
     redirect("/metrics");
   }
 
-  const [initialList, initialDomains, initialGraph] = port
+  // Graph is not SSR-seeded: the whole-corpus payload is fetched once per store
+  // revision and revalidated by ETag (304), which an HTML seed cannot do.
+  const [initialBrowse, initialList, initialDomains] = port
     ? await Promise.all([
-        // limit=500 matches the browse client fetcher (LIST_LIMIT_PARITY).
-        safe(loadKnowledgeList(port, { limit: 500 })),
-        safe(loadDomains(port)),
-        mode === "graph"
-          ? safe(loadKnowledgeGraph(port))
-          : Promise.resolve(undefined),
+        !mode || mode === "browse"
+          ? safe(loadKnowledgeBrowse(port))
+          : undefined,
+        mode === "chains"
+          ? safe(loadKnowledgeListCached(port, { limit: 500 }))
+          : undefined,
+        mode === "domains" ? safe(loadDomains(port)) : undefined,
       ])
     : [undefined, undefined, undefined];
 
@@ -75,7 +70,7 @@ export default async function KnowledgePage({
     <KnowledgeDashboardView
       initialList={initialList}
       initialDomains={initialDomains}
-      initialGraph={initialGraph}
+      initialBrowse={initialBrowse}
     />
   );
 }

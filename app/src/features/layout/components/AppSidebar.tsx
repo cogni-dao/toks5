@@ -3,7 +3,7 @@
 
 /**
  * Module: `@features/layout/components/AppSidebar`
- * Purpose: Cogni-specific sidebar composition with nav items, collapsible chat threads, and external links.
+ * Purpose: Cogni-specific sidebar composition with schedule navigation, collapsible chat threads, and external links.
  * Scope: Composes vendor Sidebar primitives into the app sidebar. Does not handle authentication or data fetching.
  * Invariants: Admin nav item is shown only when the session wallet is a repo-spec approver (`session.user.isApprover`); the `(admin)/` layout still enforces server-side. Chat threads always visible as collapsible menu item.
  * Side-effects: reads NextAuth session (`useSession`)
@@ -41,13 +41,13 @@ import {
   SidebarMenuItem,
   SidebarRail,
   SidebarSeparator,
-} from "@/components";
+} from "@/components/startup";
 import { ChatThreadsSidebarGroup } from "@/features/ai/chat/components/ChatThreadsSidebarGroup";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/work", label: "Work", icon: Briefcase },
   { href: "/schedules", label: "Schedules", icon: CalendarClock },
+  { href: "/work", label: "Work", icon: Briefcase },
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/metrics", label: "Metrics", icon: Activity },
   { href: "/gov", label: "Gov", icon: Vote },

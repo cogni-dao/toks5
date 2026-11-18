@@ -4,7 +4,7 @@
 /**
  * Module: `@bootstrap/startup-assertions`
  * Purpose: Assert node provisioning invariants once at process boot (bug.0022).
- * Scope: Verifies the cogni_system tenant exists during native startup; a pod that fails it exits non-zero. Does not monitor ongoing health.
+ * Scope: Verifies the cogni_system tenant exists on native startup; a pod that fails it exits non-zero. Does not monitor ongoing health.
  * Invariants:
  *   - SYSTEM_TENANT_STARTUP_CHECK: an unprovisioned pod crash-loops instead of serving; `/readyz` no longer hard-gates on this DB check.
  *   - Bounded: a hung connect fails the pod after BOOT_SYSTEM_TENANT_TIMEOUT_MS rather than hanging boot.
@@ -27,7 +27,7 @@ let started: Promise<void> | undefined;
 /** Reject if the system tenant is absent, the DB errors, or the budget is exceeded. */
 export async function assertSystemTenantAtBoot(
   serviceAccountService: ServiceAccountService,
-  timeoutMs: number = BOOT_SYSTEM_TENANT_TIMEOUT_MS
+  timeoutMs: number = BOOT_SYSTEM_TENANT_TIMEOUT_MS,
 ): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
@@ -35,10 +35,10 @@ export async function assertSystemTenantAtBoot(
       () =>
         reject(
           new Error(
-            `FATAL: system tenant boot check exceeded ${timeoutMs}ms budget`
-          )
+            `FATAL: system tenant boot check exceeded ${timeoutMs}ms budget`,
+          ),
         ),
-      timeoutMs
+      timeoutMs,
     );
   });
   try {
@@ -58,24 +58,29 @@ export function startSystemTenantAssertionOnBoot(
     exit?: (code: number) => void;
     timeoutMs?: number;
     force?: boolean;
-  } = {}
+  } = {},
 ): Promise<void> {
   // biome-ignore lint/style/noProcessEnv: startup gate before container config
-  const isTest = process.env.APP_ENV === "test" || process.env.VITEST === "true";
+  const isTest =
+    process.env.APP_ENV === "test" || process.env.VITEST === "true";
   if (started) return started;
   if (isTest && !options.force) return Promise.resolve();
   const exit = options.exit ?? ((code: number) => process.exit(code));
   started = assertSystemTenantAtBoot(
     serviceAccountService,
-    options.timeoutMs
+    options.timeoutMs,
   ).catch((error: unknown) => {
     try {
       makeLogger({ component: "startup-assertions" }).error(
-        { event: "startup.system_tenant.failed", severity: "critical", errorCode: "SYSTEM_TENANT_QUALIFICATION_FAILED" },
-        "system tenant qualification failed; exiting"
+        {
+          event: "startup.system_tenant.failed",
+          severity: "critical",
+          errorCode: "SYSTEM_TENANT_QUALIFICATION_FAILED",
+        },
+        "boot assertion failed: cogni_system tenant not provisioned or unreachable — exiting so the pod crash-loops",
       );
     } catch {
-      // Diagnostics cannot replace the qualification rejection or prevent exit.
+      // Diagnostics cannot prevent termination or replace the qualification error.
     }
     exit(1);
     throw error;

@@ -30,10 +30,7 @@ Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `A
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/chat`, `/dashboard`, `/work`, `/work/items/[id]`, `/metrics`, `/activity`, `/gov`, `/credits`, `/schedules`, `/schedules/[scheduleId]`, `/setup`
-- BOUNDED_BOARD_READS (task.0056): `/work` and `/dashboard` never download the backlog. The `/work` board makes one `/api/v1/work/board` request plus one `/api/v1/work/summaries` request per column "Load more" through the package `useWorkBoard`; the table requests one cursor page through `useWorkTablePage`; `/dashboard` uses `useOpenWork` (at most 5 active summaries). No client code walks cursors.
-- METRICS_IS_THE_PACKAGE_VIEW (story.0039): `/metrics` renders the published `MetricsBoard` (goals → KPIs → metrics, one `MetricCard`) from `@cogni/knowledge-base-ui/goals` through the node's one Goals host (`_components/goals-host.ts`); the page only seeds one goal read and owns no Metrics markup. `/knowledge?mode=goals` redirects to `/metrics`. Work views mount `WorkGoalsMount` so the Goal column, board pointer and the detail's Moves block read one cached goals read.
-- PEEK_KEEPS_PAGE (bug.0011): citation links in entry Links and inbox cards render through `PeekLink` (`_components/EntityPeek.tsx`). A plain click on a knowledge id opens it in the shell-level side sheet (`EntityPeekProvider` in `layout.tsx`, `knowledge/_components/KnowledgeSelection.tsx`), and links inside the sheet swap its entry. Modified clicks, work-item ids and links outside the provider navigate.
+- **Routes:** `/chat`, `/dashboard`, `/work`, `/work/items/[id]`, `/activity`, `/gov`, `/credits`, `/schedules`, `/setup`
 - **Files considered API:** `layout.tsx`
 
 ## Responsibilities
@@ -53,6 +50,9 @@ pnpm build   # build for production
 - Auth route coverage lives in `proxy.ts`. Add new protected top-level routes there before linking them in the shell.
 - Unauthenticated users are redirected to `/` before the app shell renders. No auto sign-out — sign-out is an explicit user action.
 - Sidebar navigation links stay within `(app)` routes. The sidebar logo links to `/chat`, not `/`.
+- BOUNDED_BOARD_READS (task.0055): `/work` and `/dashboard` never download the backlog. The `/work` board makes one `/api/v1/work/board` request (≤20 summaries per visible status column) plus one `/api/v1/work/summaries` request per column "Load more", through the package `useWorkBoard`; the table requests one cursor page through `useWorkTablePage` (the node keeps only URL/history navigation); `/dashboard` uses `useOpenWork` (at most 5 active summaries). No client code walks cursors or hand-builds list params.
+- PEEK_KEEPS_PAGE (bug.0011): citation links in entry Links and inbox cards render through `PeekLink` (`_components/EntityPeek.tsx`). A plain click on a knowledge id opens it in the shell-level side sheet (`EntityPeekProvider` in `layout.tsx`), and links inside the sheet swap its entry. Modified clicks, work-item ids and links outside the provider navigate.
+- BOUNDED_KNOWLEDGE_READS (task.0059): `/knowledge` Browse and Graph render only `@cogni/knowledge-base-ui` exports (`/knowledge`: `KnowledgeBrowse`, `KnowledgeGraph`; `/graph-3d`: the WebGL renderer, lazy-loaded with `next/dynamic`). Browse shows "Showing 1–20 of N" from the store's exact `total`. Graph draws the whole corpus from `/api/v1/knowledge/graph` (auth + `readKnowledgeGraph` from `@cogni/knowledge-store`: one pinned projected read per revision, `ETag` = Dolt HEAD with 304 on `If-None-Match`, deadline → 503), never SSR-seeded; the client revalidates with its cached revision and keeps the parsed graph on 304. The node keeps its fetchers (`knowledge/_api/fetchBrowse.ts`, `fetchGraph.ts`, `_api/fetchCitationLinks.ts`), the Browse SSR seed, the canonical entry/source type lists and the exact-ID detail sheet.
 
 ## Dependencies
 

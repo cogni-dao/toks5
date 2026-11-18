@@ -108,6 +108,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/app/src/adapters/server/db/doltgr
 # and runs the post-migrate schema check before any tracking-row stamping,
 # closing the silent-skip gap from drizzle-orm's folderMillis-only "applied?"
 # check.
+# The node-owned CLI consumes the bundled knowledge-store migration subpath;
+# Next tracing cannot see this standalone runtime entry.
+COPY --from=builder --chown=nextjs:nodejs /app/packages/knowledge-store/dist /app/node_modules/@cogni-dao/knowledge-store/dist
+COPY --from=builder --chown=nextjs:nodejs /app/packages/knowledge-store/package.json /app/node_modules/@cogni-dao/knowledge-store/package.json
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate-doltgres.mjs /app/app/migrate-doltgres.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/verify-doltgres-schema.mjs /app/app/verify-doltgres-schema.mjs
 
@@ -133,7 +137,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/config/mcp.servers.json ./app/con
 ARG BUILD_SHA
 ENV APP_BUILD_SHA=$BUILD_SHA
 
-# Static artifact identity for the operator's candidate bundle verification.
+# bug.5183: bake a SHA-addressed marker into the static layer so the external
+# candidate gate can prove the served browser assets and `/version` came from
+# the same image. The SHA-unique path also prevents cross-build cache aliasing.
 RUN if [ -n "$BUILD_SHA" ]; then \
       mkdir -p ./app/public/__cogni-build && \
       printf '%s' "$BUILD_SHA" > "./app/public/__cogni-build/${BUILD_SHA}.txt" && \

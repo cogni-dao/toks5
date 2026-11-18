@@ -12,12 +12,17 @@
  */
 
 export type {
+  AccountCreditsCapability,
+  AccountCreditsInfo,
+  ActiveGoalInfo,
   AuthCapability,
   ChainDirection,
   ChainNodeEntry,
   CheckInfo,
   CiStatusResult,
   ClockCapability,
+  CommitCompareResult,
+  CommitCompareStatus,
   CreateBranchResult,
   DecideParams,
   DispatchCandidateFlightResult,
@@ -38,6 +43,7 @@ export type {
   MetricsCapability,
   MetricTemplate,
   MetricWindow,
+  PrFacts,
   PrSummary,
   RecordOutcomeParams,
   RecordOutcomeResult,
@@ -64,8 +70,9 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemPatchScores,
+  WorkItemQueryPage,
   WorkItemQueryParams,
-  WorkItemTransitionResult,
 } from "./capabilities";
 // Capabilities
 export {
@@ -75,6 +82,7 @@ export {
   REPO_CITATION_REGEX,
   stubAuthCapability,
   systemClock,
+  WorkItemPatchConflictError,
 } from "./capabilities";
 // Tool catalog
 export {
@@ -85,10 +93,26 @@ export {
   getToolIds,
   hasToolId,
   TOOL_CATALOG,
+  VCS_TOOL_BUNDLE,
   type ToolCatalog,
 } from "./catalog";
 // Runtime adapter
-export { contractToRuntime, toBoundToolRuntime } from "./runtime-adapter";
+export {
+  contractToRuntime,
+  SECRET_ARGS_UNAVAILABLE,
+  SECRET_ARGS_VALIDATION_MESSAGE,
+  toBoundToolRuntime,
+} from "./runtime-adapter";
+// Secret tool arguments
+export { declaresSecretArgs, REDACTION_MARKER } from "./secret-args";
+export {
+  CREDENTIAL_NAME,
+  declaredPathsNotStringFields,
+  pathsThatLeakAProbe,
+  SECRET_PROBE,
+  secretArgsLeaks,
+  undeclaredCredentialFields,
+} from "./secret-args-lint";
 // Schema compilation
 export {
   type ToToolSpecResult,
@@ -97,6 +121,19 @@ export {
   toToolSpecs,
 } from "./schema";
 // Tools
+export {
+  ACCOUNT_CREDITS_READ_NAME,
+  type AccountCreditsReadDeps,
+  type AccountCreditsReadInput,
+  AccountCreditsReadInputSchema,
+  type AccountCreditsReadOutput,
+  AccountCreditsReadOutputSchema,
+  type AccountCreditsReadRedacted,
+  accountCreditsReadBoundTool,
+  accountCreditsReadContract,
+  accountCreditsReadStubImplementation,
+  createAccountCreditsReadImplementation,
+} from "./tools/account-credits-read";
 export {
   createEdoDecideImplementation,
   EDO_DECIDE_NAME,
@@ -148,6 +185,18 @@ export {
   getCurrentTimeImplementation,
 } from "./tools/get-current-time";
 export {
+  createGoalListImplementation,
+  GOAL_LIST_NAME,
+  type GoalListDeps,
+  type GoalListInput,
+  GoalListInputSchema,
+  type GoalListOutput,
+  GoalListOutputSchema,
+  goalListBoundTool,
+  goalListContract,
+  goalListStubImplementation,
+} from "./tools/goal-list";
+export {
   createKnowledgeReadImplementation,
   KNOWLEDGE_READ_NAME,
   type KnowledgeReadDeps,
@@ -162,6 +211,7 @@ export {
 } from "./tools/knowledge-read";
 export {
   createKnowledgeSearchImplementation,
+  KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS,
   KNOWLEDGE_SEARCH_NAME,
   type KnowledgeSearchDeps,
   type KnowledgeSearchInput,
@@ -284,6 +334,19 @@ export {
   vcsCreateBranchStubImplementation,
 } from "./tools/vcs-create-branch";
 export {
+  createVcsCommitContainsImplementation,
+  VCS_COMMIT_CONTAINS_NAME,
+  type VcsCommitContainsDeps,
+  type VcsCommitContainsInput,
+  VcsCommitContainsInputSchema,
+  type VcsCommitContainsOutput,
+  VcsCommitContainsOutputSchema,
+  type VcsCommitContainsRedacted,
+  vcsCommitContainsBoundTool,
+  vcsCommitContainsContract,
+  vcsCommitContainsStubImplementation,
+} from "./tools/vcs-commit-contains";
+export {
   createVcsFlightCandidateImplementation,
   VCS_FLIGHT_CANDIDATE_NAME,
   type VcsFlightCandidateDeps,
@@ -323,6 +386,19 @@ export {
   vcsListPrsStubImplementation,
 } from "./tools/vcs-list-prs";
 export {
+  createVcsPrReadImplementation,
+  VCS_PR_READ_NAME,
+  type VcsPrReadDeps,
+  type VcsPrReadInput,
+  VcsPrReadInputSchema,
+  type VcsPrReadOutput,
+  VcsPrReadOutputSchema,
+  type VcsPrReadRedacted,
+  vcsPrReadBoundTool,
+  vcsPrReadContract,
+  vcsPrReadStubImplementation,
+} from "./tools/vcs-pr-read";
+export {
   createVcsMergePrImplementation,
   VCS_MERGE_PR_NAME,
   type VcsMergePrDeps,
@@ -352,11 +428,13 @@ export {
 } from "./tools/web-search";
 export {
   createWorkItemQueryImplementation,
+  WORK_ITEM_QUERY_MAX_LIMIT,
   WORK_ITEM_QUERY_NAME,
   type WorkItemQueryDeps,
   type WorkItemQueryInput,
   WorkItemQueryInputSchema,
   type WorkItemQueryOutput,
+  WorkItemOutputSchema,
   WorkItemQueryOutputSchema,
   type WorkItemQueryRedacted,
   workItemQueryBoundTool,
@@ -364,36 +442,42 @@ export {
   workItemQueryStubImplementation,
 } from "./tools/work-item-query";
 export {
-  createWorkItemTransitionImplementation,
-  WORK_ITEM_TRANSITION_NAME,
-  type WorkItemTransitionDeps,
-  type WorkItemTransitionInput,
-  WorkItemTransitionInputSchema,
-  type WorkItemTransitionOutput,
-  WorkItemTransitionOutputSchema,
-  type WorkItemTransitionRedacted,
-  workItemTransitionBoundTool,
-  workItemTransitionContract,
-  workItemTransitionStubImplementation,
-} from "./tools/work-item-transition";
+  createWorkItemReadImplementation,
+  WORK_ITEM_READ_NAME,
+  workItemReadBoundTool,
+  workItemReadContract,
+} from "./tools/work-item-read";
+export {
+  createWorkItemArtifactRecordImplementation,
+  WORK_ITEM_ARTIFACT_RECORD_NAME,
+  type WorkItemArtifactRecordDeps,
+  type WorkItemArtifactRecordInput,
+  WorkItemArtifactRecordInputSchema,
+  type WorkItemArtifactRecordOutput,
+  WorkItemArtifactRecordOutputSchema,
+  workItemArtifactRecordBoundTool,
+  workItemArtifactRecordContract,
+} from "./tools/work-item-artifact-record";
+export {
+  createWorkItemUpdateImplementation,
+  WORK_ITEM_UPDATE_NAME,
+  type WorkItemUpdateDeps,
+  type WorkItemUpdateInput,
+  type WorkItemUpdateOutput,
+  WorkItemUpdateConflictSchema,
+  WorkItemUpdateOutputSchema,
+  WorkItemUpdateSuccessSchema,
+  workItemUpdateBoundTool,
+  workItemUpdateContract,
+} from "./tools/work-item-update";
 // Tool types
 export type {
   BoundTool,
   ToolContract,
   ToolErrorCode,
   ToolImplementation,
+  ToolRequires,
   ToolResult,
 } from "./types";
 
-// Shared evaluation facade; sovereign tools and runtime helpers remain local.
-export {
-  createGoalListImplementation,
-  createWorkItemReadImplementation,
-  GOAL_LIST_NAME,
-  goalListBoundTool,
-  goalListContract,
-  WORK_ITEM_READ_NAME,
-  WorkItemPatchConflictError,
-  workItemReadBoundTool,
-  workItemReadContract,
-} from "@cogni/shared-ai-tools";
+export { createMetricTools, METRIC_TOOL_BUNDLE } from "./tools/metric";

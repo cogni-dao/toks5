@@ -3,11 +3,11 @@
 
 /**
  * Module: `@app/api/v1/knowledge/[id]/history`
- * Purpose: GET a knowledge entry's versions, newest first, each with its change reason (story.0023).
- * Scope: Thin route: session check, id, `readKnowledgeHistory` from `@cogni/knowledge-store`, one log event, response. Holds no history logic.
+ * Purpose: GET a knowledge entry's versions, newest first, each with its change reason (task.0052).
+ * Scope: Thin route: session check, id, `readKnowledgeHistory` from `@cogni/knowledge-store`, one log event, response.
  * Invariants: NOTE_NOT_BODY, ONE_HISTORY_SHAPE, one terminal log event per read (counts only).
  * Side-effects: IO (HTTP response, Doltgres read)
- * Links: hub change-history-design, change-history-fleet-adoption
+ * Links: @cogni-dao/knowledge-store readKnowledgeHistory, hub change-history-design
  * @public
  */
 
@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,7 +25,11 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
-  { routeId: "knowledge.history", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "knowledge.history",
+    sameDoor: "knowledge.read",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, _request, sessionUser, context) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -36,18 +41,13 @@ export const GET = wrapRouteHandlerWithLogging<{
       getContainer().knowledgeStorePort,
       id
     );
-    const { event, errorName, ...fields } = log;
-    // The package owns the event name; the node registers none.
-    ctx.log.info(
-      {
-        event,
-        reqId: ctx.reqId,
-        routeId: ctx.routeId,
-        ...fields,
-        durationMs: Date.now() - startedAt,
-      },
-      event
-    );
+    const { event: _event, errorName, ...fields } = log;
+    logEvent(ctx.log, EVENT_NAMES.KNOWLEDGE_HISTORY_READ, {
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      ...fields,
+      durationMs: Date.now() - startedAt,
+    });
     if (errorName !== undefined) {
       ctx.log.warn({ errorName }, "knowledge.history_unavailable");
     }

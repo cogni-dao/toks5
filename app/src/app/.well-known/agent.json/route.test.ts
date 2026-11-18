@@ -52,6 +52,11 @@ describe("GET /.well-known/agent.json", () => {
     expect(body.actions.updateWorkItem.inputSchema.properties).toHaveProperty(
       "set"
     );
+    // task.0086: the reason is required and cites are offered.
+    expect(body.actions.updateWorkItem.inputSchema.required).toContain("reason");
+    expect(body.actions.updateWorkItem.inputSchema.properties).toHaveProperty(
+      "cites"
+    );
     expect(body.actions.deleteWorkItem.method).toBe("DELETE");
     expect(body.actions.claimWorkItem).toMatchObject({
       method: "POST",
@@ -61,13 +66,5 @@ describe("GET /.well-known/agent.json", () => {
     expect(body.actions.heartbeatWorkItem.method).toBe("POST");
     expect(body.actions.releaseWorkItem.method).toBe("DELETE");
     expect(body.actions.getWorkItemCoordination.method).toBe("GET");
-    expect(body.actions.getWorkItemHistory).toMatchObject({
-      method: "GET",
-      endpoint: "https://node.example/api/v1/work/items/{id}/history",
-    });
-    expect(body.actions.getKnowledgeHistory).toMatchObject({
-      method: "GET",
-      endpoint: "https://node.example/api/v1/knowledge/{id}/history",
-    });
   });
 });

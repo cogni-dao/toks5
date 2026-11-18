@@ -15,6 +15,7 @@
  */
 
 import type {
+  AccountCreditsCapability,
   EdoCapability,
   KnowledgeCapability,
   MetricsCapability,
@@ -26,6 +27,8 @@ import type {
   WorkItemCapability,
 } from "@cogni/ai-tools";
 import {
+  ACCOUNT_CREDITS_READ_NAME,
+  createAccountCreditsReadImplementation,
   createEdoDecideImplementation,
   createEdoHypothesizeImplementation,
   createEdoRecordOutcomeImplementation,
@@ -39,15 +42,18 @@ import {
   createRepoSearchImplementation,
   createScheduleListImplementation,
   createScheduleManageImplementation,
+  createVcsCommitContainsImplementation,
   createVcsCreateBranchImplementation,
   createVcsFlightCandidateImplementation,
   createVcsGetCiStatusImplementation,
   createVcsListPrsImplementation,
   createVcsMergePrImplementation,
+  createVcsPrReadImplementation,
   createWebSearchImplementation,
   createWorkItemQueryImplementation,
   createWorkItemReadImplementation,
-  createWorkItemTransitionImplementation,
+  createWorkItemArtifactRecordImplementation,
+  createWorkItemUpdateImplementation,
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
@@ -63,15 +69,18 @@ import {
   REPO_SEARCH_NAME,
   SCHEDULE_LIST_NAME,
   SCHEDULE_MANAGE_NAME,
+  VCS_COMMIT_CONTAINS_NAME,
   VCS_CREATE_BRANCH_NAME,
   VCS_FLIGHT_CANDIDATE_NAME,
   VCS_GET_CI_STATUS_NAME,
   VCS_LIST_PRS_NAME,
   VCS_MERGE_PR_NAME,
+  VCS_PR_READ_NAME,
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_ARTIFACT_RECORD_NAME,
+  WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 
 /**
@@ -79,6 +88,7 @@ import {
  * These are resolved from the container at bootstrap time.
  */
 export interface ToolBindingDeps {
+  /** Trusted public node URL for canonical provenance on returned reader content. */
   readonly nodePublicOrigin?: string | undefined;
   readonly knowledgeCapability: KnowledgeCapability;
   readonly edoCapability: EdoCapability;
@@ -87,7 +97,11 @@ export interface ToolBindingDeps {
   readonly repoCapability: RepoCapability;
   readonly scheduleCapability: ScheduleCapability;
   readonly vcsCapability: VcsCapability;
+  /** Build SHA of the running app (APP_BUILD_SHA, as /version reports it). */
+  readonly runningBuildSha?: string | undefined;
   readonly workItemCapability: WorkItemCapability;
+  /** Reads the run's account as the acting principal, under row-level security (the `account:read` tool twin). */
+  readonly accountCreditsCapability: AccountCreditsCapability;
 }
 
 /**
@@ -115,11 +129,17 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
   // cast to the base type. This is safe because contractToRuntime validates
   // at runtime via Zod schemas.
   return {
+    // Account read: opens only for a principal with a live `account:read` row for the run's account (guard), and RLS repeats the test.
+    [ACCOUNT_CREDITS_READ_NAME]: createAccountCreditsReadImplementation({
+      accountCreditsCapability: deps.accountCreditsCapability,
+    }) as AnyToolImplementation,
+
     // Pure tools (no I/O dependencies)
     [GET_CURRENT_TIME_NAME]:
       getCurrentTimeImplementation as AnyToolImplementation,
 
     // Knowledge tools (Doltgres-backed knowledge store)
+    // ONE_GOAL_LIST: the approved DAO goals (knowledgeCapability.listActiveGoals).
     [GOAL_LIST_NAME]: createGoalListImplementation({
       knowledgeCapability: deps.knowledgeCapability,
       nodePublicOrigin: deps.nodePublicOrigin,
@@ -177,6 +197,11 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       scheduleCapability: deps.scheduleCapability,
     }) as AnyToolImplementation,
 
+    [VCS_COMMIT_CONTAINS_NAME]: createVcsCommitContainsImplementation({
+      vcsCapability: deps.vcsCapability,
+      runningBuildSha: deps.runningBuildSha,
+    }) as AnyToolImplementation,
+
     [VCS_CREATE_BRANCH_NAME]: createVcsCreateBranchImplementation({
       vcsCapability: deps.vcsCapability,
     }) as AnyToolImplementation,
@@ -197,17 +222,23 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       vcsCapability: deps.vcsCapability,
     }) as AnyToolImplementation,
 
+    [VCS_PR_READ_NAME]: createVcsPrReadImplementation({
+      vcsCapability: deps.vcsCapability,
+    }) as AnyToolImplementation,
+
     [WORK_ITEM_QUERY_NAME]: createWorkItemQueryImplementation({
       workItemCapability: deps.workItemCapability,
       nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
-
     [WORK_ITEM_READ_NAME]: createWorkItemReadImplementation({
       workItemCapability: deps.workItemCapability,
       nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
 
-    [WORK_ITEM_TRANSITION_NAME]: createWorkItemTransitionImplementation({
+    [WORK_ITEM_UPDATE_NAME]: createWorkItemUpdateImplementation({
+      workItemCapability: deps.workItemCapability,
+    }) as AnyToolImplementation,
+    [WORK_ITEM_ARTIFACT_RECORD_NAME]: createWorkItemArtifactRecordImplementation({
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
   };
