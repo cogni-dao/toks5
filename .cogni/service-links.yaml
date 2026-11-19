@@ -11,6 +11,7 @@
 #     services:  the service slugs it may sign as. Include `node-ai` for its AI's asks and reads, and `node-connect` to let it connect
 #                from its own /admin/connections (a signed connect with a cap; this node then keeps one record for it, and its
 #                admin funds it on /admin/connected-orgs).
+#     name:      optional. The home's node name as THIS node's own list says it; pages show it instead of the URL, never a trust input.
 #     node_id:   optional. The home's node id as THIS node's own list says it; shown on /admin/connected-orgs, never a trust input.
 #   targets: nodes this node's AI may read knowledge from and ask for access (the `node` argument of the knowledge tools).
 #     alias:     the name a tool uses (lowercase letters, digits, dashes).
@@ -20,11 +21,12 @@
 candidate-a:
   trusted_homes:
     - issuer: "https://node-template-test.cognidao.org"
+      name: "node-template"
       jwks_uri: "https://node-template-test.cognidao.org/.well-known/jwks.json"
       services: ["node-ai"]
   targets:
     - alias: node-template
       node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"
       origin: "https://node-template-test.cognidao.org"
-      offer: "node-template services: knowledge reads and AI runs, billed to toks5's allowance on node-template"
+      offer: "AI runs on node-template, charged to this node's account there, up to your limit. Reads are free."
 production: {}
