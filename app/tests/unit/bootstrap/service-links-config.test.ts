@@ -25,12 +25,19 @@ const load = (environment: string | undefined, read: (file: string) => string = 
   loadServiceLinksConfig({ environment, repoRoot, log: log as never, read });
 
 describe("the shipped .cogni/service-links.yaml", () => {
-  it("candidate-a trusts node-template-test's node-ai and may call node-template; production has none", () => {
+  it("candidate-a trusts node-template-test's node-ai and may call node-template (with its offer text); production has none", () => {
     expect(load("candidate-a")).toEqual({
       trustedHomes: [
-        { issuer: "https://node-template-test.cognidao.org", jwksUri: "https://node-template-test.cognidao.org/.well-known/jwks.json", services: ["node-ai"] },
+        { issuer: "https://node-template-test.cognidao.org", jwksUri: "https://node-template-test.cognidao.org/.well-known/jwks.json", services: ["node-ai"], name: "node-template" },
       ],
-      targets: [{ alias: "node-template", nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c", origin: "https://node-template-test.cognidao.org" }],
+      targets: [
+        {
+          alias: "node-template",
+          nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
+          origin: "https://node-template-test.cognidao.org",
+          offer: "AI runs on node-template, charged to this node's account there, up to your limit. Reads are free.",
+        },
+      ],
     });
     expect(load("production")).toEqual({ trustedHomes: [], targets: [] });
   });

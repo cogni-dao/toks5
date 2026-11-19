@@ -75,14 +75,19 @@ export type {
   WorkItemQueryParams,
 } from "./capabilities";
 export {
+  ACCESS_REQUESTED_MESSAGE,
   createRemoteKnowledgeTransport,
   REMOTE_ALIAS_PATTERN,
+  REMOTE_ASK_INTERVAL_MS,
+  REMOTE_ENROLLMENT_PATH,
   REMOTE_KNOWLEDGE_SCOPE,
   REMOTE_KNOWLEDGE_SERVICE,
   RemoteKnowledgeError,
   readBodyCapped,
   redactSecretShapes,
+  REMOTE_INDEX_MAX_LIMIT,
   type RemoteKnowledgeCapability,
+  type RemoteKnowledgeIndexRow,
   type RemoteKnowledgeTarget,
 } from "./remote-knowledge";
 // Capabilities

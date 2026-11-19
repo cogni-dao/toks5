@@ -9,6 +9,7 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__knowledge_read`
  *   - EFFECT_TYPED: effect is `read_only`
  *   - HARD_BOUNDS: max 50 results for list mode
+ *   - SPEC_REF_READS_ITS_ATOM: an id written `knowledge:<id>` (a work item's specRefs entry) reads atom `<id>` (story.0069)
  * Side-effects: IO (database read via capability)
  * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md
  * @public
@@ -16,9 +17,10 @@
 
 import { z } from "zod";
 import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
+import { parseSpecRef } from "@cogni-dao/work-items";
 
 import type { KnowledgeCapability, KnowledgeEntry } from "../capabilities/knowledge";
-import { REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
+import { ACCESS_REQUESTED_MESSAGE, REMOTE_ALIAS_PATTERN, RemoteKnowledgeError, type RemoteKnowledgeCapability } from "../remote-knowledge";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
@@ -28,7 +30,9 @@ const knowledgeReadFields = {
     id: z
       .string()
       .optional()
-      .describe("Get a specific entry by ID (mutually exclusive with domain)"),
+      .describe(
+        "Get a specific entry by ID, or by a work item's design ref `knowledge:<id>` as specRefs lists it (mutually exclusive with domain)",
+      ),
     domain: z
       .string()
       .optional()
@@ -78,6 +82,10 @@ export const KnowledgeReadOutputSchema = z.object({
   mode: z.enum(["get", "list"]),
   entries: z.array(KnowledgeReadEntrySchema),
   totalFound: z.number(),
+  /** Set only when this node's AI asked the named node for access: the fixed, terminal answer of a remote read the target answered 401. */
+  status: z.literal("access_requested").optional(),
+  node: z.string().optional(),
+  message: z.string().optional(),
 });
 export type KnowledgeReadOutput = z.infer<typeof KnowledgeReadOutputSchema>;
 export type KnowledgeReadRedacted = KnowledgeReadOutput;
@@ -103,7 +111,7 @@ export const knowledgeReadContract: ToolContract<
   inputSchema: KnowledgeReadInputSchema,
   outputSchema: KnowledgeReadOutputSchema,
   redact: (output) => output,
-  allowlist: ["mode", "entries", "totalFound"] as const,
+  allowlist: ["mode", "entries", "totalFound", "status", "node", "message"] as const,
 };
 
 // ─── Implementation ──────────────────────────────────────────────────────────
@@ -122,7 +130,8 @@ export function createKnowledgeReadImplementation(
     execute: async (input) => {
       if (input.node !== undefined) return executeRemote(deps, input.node, input);
       if (input.id) {
-        const entry = await deps.knowledgeCapability.get(input.id);
+        // A work item's typed design ref (story.0069) reads as the atom it names.
+        const entry = await deps.knowledgeCapability.get(parseSpecRef(input.id) ?? input.id);
         return {
           mode: "get" as const,
           entries: entry ? [{
@@ -161,6 +170,21 @@ async function executeRemote(
   const remote = deps.remoteKnowledge;
   const origin = remote?.originOf(alias);
   if (!remote || origin === undefined) throw new RemoteKnowledgeError("unknown_alias", null);
+  try {
+    return await readRemote(remote, origin, alias, input);
+  } catch (error) {
+    if (error instanceof RemoteKnowledgeError && error.code === "access_requested")
+      return { mode: input.id ? ("get" as const) : ("list" as const), entries: [], totalFound: 0, status: "access_requested" as const, node: alias, message: ACCESS_REQUESTED_MESSAGE };
+    throw error;
+  }
+}
+
+async function readRemote(
+  remote: RemoteKnowledgeCapability,
+  origin: string,
+  alias: string,
+  input: KnowledgeReadInput
+): Promise<KnowledgeReadOutput> {
   const withProvenance = (e: KnowledgeEntry) => ({
     ...withoutSourceProvenance(e),
     ...readSourceProvenance(origin, "knowledge", e.id),

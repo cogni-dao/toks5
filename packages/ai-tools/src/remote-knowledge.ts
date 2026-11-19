@@ -8,11 +8,13 @@
  * Scope: Pure construction plus one injected `fetch` and one injected `authorize` (the host signs a short-lived service assertion). Reads no env and holds no key.
  * Invariants:
  *   - ALIAS_FROM_SERVER_CONFIG: targets come only from the deployment's Git config (`.cogni/service-links.yaml`, parsed by `parseLinkTargets` in `@cogni-dao/agent-grants`); an alias that is not listed is `unknown_alias`. The model names an alias, never a URL.
- *   - GET_ONLY_CONFIGURED_ORIGIN: every request is a GET to `{origin}/api/v1/knowledge/{id}` or `{origin}/api/v1/knowledge?...`, https only, the configured origin only.
+ *   - GET_ONLY_CONFIGURED_ORIGIN: every request is a GET to `{origin}/api/v1/knowledge/{id}`, `{origin}/api/v1/knowledge?domain&q&limit` (list and search) or
+ *     `{origin}/api/v1/knowledge/index?domain&q&limit` (the routing projection: id, domain, entryType and trigger, no content), https only, the configured origin only.
  *     Redirects are never followed (`redirect: "manual"`; any 3xx is `unavailable`). 10 s timeout. The body is capped at 1 MiB while it streams.
  *   - NO_HEADERS_BACK: only parsed knowledge rows leave the transport; no response header is returned or logged.
  *   - REDACT_SECRET_SHAPES: any `cogni_ag_sk_` key or JWT-shaped string in a body is replaced before the body is parsed.
- *   - DENIAL_IS_FIXED: a 401 or 403 from the target is `policy_denied`, which the tools turn into one fixed non-retryable receipt; nothing from the target's body is passed on. Every other
+ *   - ASK_ON_401: a 401 to a signed assertion sends ONE signed access ask (see `askForAccess`) and the tools answer the fixed `access_requested` result; a 403 is `policy_denied` and never asks.
+ *   - DENIAL_IS_FIXED: a 401 (when no ask went out) or 403 from the target is `policy_denied`, which the tools turn into one fixed non-retryable receipt; nothing from the target's body is passed on. Every other
  *     failure (5xx, timeout, network, oversized body) is retryable `unavailable`.
  *   - ID_IS_CHECKED: a model-chosen id must match `REMOTE_KNOWLEDGE_ID_PATTERN` before a URL is built. BOUNDED_CONTENT: each entry's content is cut to `REMOTE_ENTRY_CONTENT_MAX_CHARS`.
  *   - CAPABILITY_INJECTION (tool-credential-brokering): no connection id or credential is a tool argument; the Authorization header exists only inside `fetch`.
@@ -22,6 +24,7 @@
  */
 
 import { type KnowledgeEntry, KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
+import { z } from "zod";
 
 /** One configured remote node: the alias a tool names, the node id the assertion's `aud` carries, and the target's canonical https origin. */
 export interface RemoteKnowledgeTarget {
@@ -47,11 +50,20 @@ export const REMOTE_ENTRY_CONTENT_MAX_CHARS = 64 * 1024;
 /** A knowledge id the transport will put in a URL: an alphanumeric start, then letters, digits, dot, dash, underscore; never `.` or `..`. */
 export const REMOTE_KNOWLEDGE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 
-export type RemoteKnowledgeErrorCode = "unknown_alias" | "invalid_id" | "policy_denied" | "unavailable";
+/** The path of a target's public service-enrollment route: where this node's AI asks for access. */
+export const REMOTE_ENROLLMENT_PATH = "/api/v1/public/agent/service-enrollments";
+/** At most one access ask per (alias, scope) per this many milliseconds, per process. */
+export const REMOTE_ASK_INTERVAL_MS = 10 * 60_000;
+
+/** The one message a model sees when an ask for access went out. */
+export const ACCESS_REQUESTED_MESSAGE = "Access requested; an admin of that node must turn it On.";
+
+export type RemoteKnowledgeErrorCode = "unknown_alias" | "invalid_id" | "access_requested" | "policy_denied" | "unavailable";
 
 const FIXED_MESSAGE: Record<RemoteKnowledgeErrorCode, string> = {
   unknown_alias: "Unknown node alias",
   invalid_id: "Invalid knowledge id",
+  access_requested: ACCESS_REQUESTED_MESSAGE,
   policy_denied: "Tool call denied by policy",
   unavailable: "Remote knowledge is unavailable",
 };
@@ -72,12 +84,27 @@ export class RemoteKnowledgeError extends Error {
   }
 }
 
+/** One routing row of a remote node's knowledge index: no content, only what an agent needs to pick an entry. `useWhen` is the retrieval trigger (null until backfilled). */
+export interface RemoteKnowledgeIndexRow {
+  readonly id: string;
+  readonly domain: string;
+  readonly entryType: string;
+  readonly useWhen: string | null;
+}
+
+const IndexRowSchema = z.object({ id: z.string(), domain: z.string(), entryType: z.string(), useWhen: z.string().nullable() });
+
+/** The most rows an index read asks for (the target's own cap). */
+export const REMOTE_INDEX_MAX_LIMIT = 1000;
+
 export interface RemoteKnowledgeCapability {
   /** The configured origin of an alias (for source provenance), or undefined when the alias is not configured. */
   originOf(alias: string): string | undefined;
   get(alias: string, id: string): Promise<KnowledgeEntry | null>;
   list(alias: string, params: { domain: string; limit: number }): Promise<KnowledgeEntry[]>;
   search(alias: string, params: { domain: string; query: string; limit: number }): Promise<KnowledgeEntry[]>;
+  /** The routing projection of the target's knowledge (`GET /api/v1/knowledge/index`): id, domain, entryType and trigger per entry, no content. `q` matches the trigger only. */
+  index(alias: string, params: { domain?: string | undefined; q?: string | undefined; limit: number }): Promise<RemoteKnowledgeIndexRow[]>;
 }
 
 function isCanonicalHttpsOrigin(value: string): boolean {
@@ -135,11 +162,51 @@ export function createRemoteKnowledgeTransport(deps: {
   readonly fetchImpl?: typeof fetch;
   readonly timeoutMs?: number;
   readonly maxBodyBytes?: number;
+  /** Epoch milliseconds; default `Date.now`. Only the ask rate bound reads it. */
+  readonly now?: () => number;
+  /** Called after each access ask this transport sends: alias, scope and the target's HTTP status (null when it could not be reached). Never a token. */
+  readonly onAsked?: (event: { alias: string; scope: string; httpStatus: number | null }) => void;
 }): RemoteKnowledgeCapability {
   const targets = new Map(deps.targets.filter((t) => isCanonicalHttpsOrigin(t.origin)).map((t) => [t.alias, t]));
   const doFetch = deps.fetchImpl ?? fetch;
   const timeoutMs = deps.timeoutMs ?? REMOTE_TIMEOUT_MS;
   const maxBytes = deps.maxBodyBytes ?? REMOTE_MAX_BODY_BYTES;
+
+  /**
+   * ASK_ON_401: a signed node-ai assertion the target answers 401 (no principal yet, not enrolled) means this node's AI has not asked. The transport then sends ONE signed ask for
+   * `knowledge:read` to the target's public enrollment route, at most once per (alias, scope) per `REMOTE_ASK_INTERVAL_MS` per process (memory only; the target also keeps one pending ask per
+   * principal). Returns `requested` when an ask is outstanding (just sent, or sent within the interval and accepted) and `refused` when the ask did not go through (the target refused or could not be
+   * reached), so the model is never told access was requested when it was not. A 403 never asks: that is a decision, not a missing ask.
+   */
+  const asked = new Map<string, { at: number; ok: boolean }>();
+  const now = deps.now ?? Date.now;
+  async function askForAccess(target: RemoteKnowledgeTarget): Promise<"requested" | "refused"> {
+    const key = `${target.alias}\u0000${REMOTE_KNOWLEDGE_SCOPE}`;
+    const before = asked.get(key);
+    if (before && now() - before.at < REMOTE_ASK_INTERVAL_MS) return before.ok ? "requested" : "refused";
+    // Recorded before the call, so concurrent 401s send one ask.
+    asked.set(key, { at: now(), ok: false });
+    let httpStatus: number | null = null;
+    let ok = false;
+    try {
+      const authorization = await deps.authorize(target, REMOTE_KNOWLEDGE_SCOPE);
+      const response = await doFetch(new URL(REMOTE_ENROLLMENT_PATH, target.origin).href, {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json", authorization },
+        body: JSON.stringify({ scope: REMOTE_KNOWLEDGE_SCOPE }),
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      httpStatus = response.status;
+      ok = response.ok;
+      await response.body?.cancel().catch(() => undefined);
+    } catch {
+      ok = false;
+    }
+    asked.set(key, { at: now(), ok });
+    deps.onAsked?.({ alias: target.alias, scope: REMOTE_KNOWLEDGE_SCOPE, httpStatus });
+    return ok ? "requested" : "refused";
+  }
 
   /** One GET. Returns the parsed JSON body, or null for a 404. Throws `RemoteKnowledgeError`. */
   async function getJson(alias: string, path: string, query?: URLSearchParams): Promise<unknown | null> {
@@ -161,7 +228,11 @@ export function createRemoteKnowledgeTransport(deps: {
     } catch {
       throw new RemoteKnowledgeError("unavailable", alias);
     }
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new RemoteKnowledgeError((await askForAccess(target)) === "requested" ? "access_requested" : "policy_denied", alias);
+    }
+    if (response.status === 403) {
       await response.body?.cancel().catch(() => undefined);
       throw new RemoteKnowledgeError("policy_denied", alias);
     }
@@ -214,6 +285,21 @@ export function createRemoteKnowledgeTransport(deps: {
     async list(alias, { domain, limit }) {
       const body = await getJson(alias, "/api/v1/knowledge", new URLSearchParams({ domain, limit: String(limit) }));
       return rows(body).slice(0, limit).map(capContent);
+    },
+    async index(alias, { domain, q, limit }) {
+      const query = new URLSearchParams({ limit: String(Math.min(REMOTE_INDEX_MAX_LIMIT, Math.max(1, Math.floor(limit)))) });
+      if (domain) query.set("domain", domain);
+      if (q) query.set("q", q.slice(0, 320));
+      const body = await getJson(alias, "/api/v1/knowledge/index", query);
+      const items = (body as { items?: unknown } | null)?.items;
+      if (!Array.isArray(items)) return [];
+      return items
+        .flatMap((item) => {
+          const parsed = IndexRowSchema.safeParse(item);
+          return parsed.success ? [parsed.data] : [];
+        })
+        .slice(0, limit)
+        .map((r) => (r.useWhen !== null && r.useWhen.length > REMOTE_ENTRY_CONTENT_MAX_CHARS ? { ...r, useWhen: `${r.useWhen.slice(0, REMOTE_ENTRY_CONTENT_MAX_CHARS)}…` } : r));
     },
     async search(alias, { domain, query, limit }) {
       const body = await getJson(

@@ -12,20 +12,22 @@
  *   - SIGNER_FAILS_LOUD: a malformed signing seed (not 64 hex characters) or an unusable origin is no signer plus one
  *     `service_auth.signer_unavailable` warning naming the reason, never a silent null and never the key.
  *   - APPROVERS_ONLY: owners are `activity_ledger.approvers` mapped to the users that bound those wallets (`user_bindings`, provider `wallet`, lowercase).
- *   - SINGLE_REPLICA_REPLAY: the replay store is in memory; a target with several replicas needs a shared store behind the same interface.
+ *   - DURABLE_REPLAY (0.9.0): the replay store is the Postgres `service_assertion_jtis` table (unique `jti`, pruned after `exp`), so a replayed assertion is refused after a restart and by every
+ *     replica. A store failure rejects the check (the route answers 503); it is never a pass.
  * Side-effects: IO (HTTPS to GitHub, service-role reads)
  * Links: https://node-template.cognidao.org/knowledge/node-service-enrollment, https://node-template.cognidao.org/knowledge/node-relationships-design
  * @internal
  */
 
 import {
-  createOwnerSources,
   createGithubRepoSpecFetcher,
+  createIssuerOwnerSource,
+  createOwnerSources,
   createRepoSpecOwnerSource,
   type OrgOwners,
 } from "@cogni/agent-grants/orgs";
 import {
-  createMemoryReplayStore,
+  createPostgresReplayStore,
   createServiceAssertionSignerFromSeed,
   createServiceAssertionVerifier,
   type ServiceAssertionResult,
@@ -33,9 +35,9 @@ import {
   type ServiceAssertionVerifier,
   type TrustedHome,
 } from "@cogni/agent-grants/service-auth";
-import { extractLedgerApprovers, parseRepoSpec } from "@cogni/repo-spec";
+import { readLedgerApproversFromYaml } from "@cogni/repo-spec";
 import type { Logger } from "pino";
-import { EVENT_NAMES } from "@/shared/observability";
+import { EVENT_NAMES, failureFields } from "@/shared/observability";
 import type { AgentAuthoritySql } from "./agent-authority";
 
 export interface ServiceAuth {
@@ -103,13 +105,16 @@ export function createServiceAuth(deps: {
   const verifier = createServiceAssertionVerifier({
     selfNodeId: deps.nodeId,
     trustedHomes: [...deps.trustedHomes],
-    replay: createMemoryReplayStore(),
+    replay: createPostgresReplayStore(deps.sql),
   });
   const owners = createOwnerSources([
+    // An issuer-keyed org (a customer node's record on this provider) has no owners: a read always throws `issuer_has_no_owners`, so no decision over it passes an owner list.
+    createIssuerOwnerSource(),
     createRepoSpecOwnerSource({
       // The package reads no env var: this composition hands it a token provider over the one env value.
       fetchRepoSpec: createGithubRepoSpecFetcher({ token: async () => deps.env.GITHUB_READ_TOKEN }),
-      extractApprovers: (yaml) => extractLedgerApprovers(parseRepoSpec(yaml)),
+      // Another node's repo-spec may carry fields this schema retired or never had: read only its approver list.
+      extractApprovers: readLedgerApproversFromYaml,
       usersForWallets: (wallets) => usersForWallets(deps.sql, wallets),
     }),
   ]);
@@ -119,7 +124,17 @@ export function createServiceAuth(deps: {
     verifier,
     owners,
     async verify(token) {
-      const result = await verifier.verify(token);
+      let result: ServiceAssertionResult;
+      try {
+        result = await verifier.verify(token);
+      } catch (error) {
+        // The durable replay store failed: nothing was decided, so the caller answers 503 (never a pass, never a 401).
+        deps.log.error(
+          { event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "service_auth.replay_store", ...failureFields(error) },
+          EVENT_NAMES.AGENT_ROLES_UNAVAILABLE
+        );
+        throw error;
+      }
       // Never the token. On a refusal the issuer and service are the unverified claims, for diagnosis only.
       if (result.ok)
         deps.log.info(
