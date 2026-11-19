@@ -8,11 +8,15 @@
 #   trusted_homes: homes whose signed service assertions this node accepts.
 #     issuer:    the home's canonical https origin.
 #     jwks_uri:  where its public keys are published (https).
-#     services:  the service slugs it may sign as.
+#     services:  the service slugs it may sign as. Include `node-ai` for its AI's asks and reads, and `node-connect` to let it connect
+#                from its own /admin/connections (a signed connect with a cap; this node then keeps one record for it, and its
+#                admin funds it on /admin/connected-orgs).
+#     node_id:   optional. The home's node id as THIS node's own list says it; shown on /admin/connected-orgs, never a trust input.
 #   targets: nodes this node's AI may read knowledge from and ask for access (the `node` argument of the knowledge tools).
 #     alias:     the name a tool uses (lowercase letters, digits, dashes).
 #     node_id:   the target's node id (becomes the assertion's audience).
 #     origin:    the target's canonical https origin.
+#     offer:     optional. Static text shown beside the target on /admin/connections (at most 280 characters); this node never asks the target for it.
 candidate-a:
   trusted_homes:
     - issuer: "https://node-template-test.cognidao.org"
@@ -22,4 +26,5 @@ candidate-a:
     - alias: node-template
       node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"
       origin: "https://node-template-test.cognidao.org"
+      offer: "node-template services: knowledge reads and AI runs, billed to toks5's allowance on node-template"
 production: {}
