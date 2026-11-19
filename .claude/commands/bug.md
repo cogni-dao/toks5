@@ -23,7 +23,7 @@ curl -X POST https://cognidao.org/api/v1/work/items \
     "node": "<node>",
     "title": "<one-line symptom>",
     "priority": 1,
-    "specRefs": ["<spec-id-if-violated>"],
+    "specRefs": ["knowledge:<design-atom-id-if-violated>"],
     "summary": "OBSERVED: <what happens, with file:line>\nEXPECTED: <what should happen>\nREPRO: <steps>\nIMPACT: <who/severity>",
     "outcome": "Success is when <human|AI> can <do the broken thing without seeing the failure>.",
     "moves": [{"metricId": "<metric-id>", "direction": "<up|down>"}]
