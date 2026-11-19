@@ -74,6 +74,17 @@ export type {
   WorkItemQueryPage,
   WorkItemQueryParams,
 } from "./capabilities";
+export {
+  createRemoteKnowledgeTransport,
+  REMOTE_ALIAS_PATTERN,
+  REMOTE_KNOWLEDGE_SCOPE,
+  REMOTE_KNOWLEDGE_SERVICE,
+  RemoteKnowledgeError,
+  readBodyCapped,
+  redactSecretShapes,
+  type RemoteKnowledgeCapability,
+  type RemoteKnowledgeTarget,
+} from "./remote-knowledge";
 // Capabilities
 export {
   CONFIDENCE,
@@ -95,6 +106,7 @@ export {
   TOOL_CATALOG,
   VCS_TOOL_BUNDLE,
   type ToolCatalog,
+  withoutRemoteNodeArgument,
 } from "./catalog";
 // Runtime adapter
 export {
