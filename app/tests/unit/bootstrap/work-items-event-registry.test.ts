@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 
 const registered = new Set<string>(Object.values(EVENT_NAMES));
 const root = resolve(__dirname, "../../../..");
-const adapter = readFileSync(resolve(root, "packages/work-items/src/adapters/doltgres/adapter.ts"), "utf8");
+const adapter = readFileSync(resolve(root, "app/node_modules/@cogni/work-items/dist/adapters/doltgres/index.js"), "utf8");
 
 describe("work-items event names", () => {
   it.each([

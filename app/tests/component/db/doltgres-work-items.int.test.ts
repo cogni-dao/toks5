@@ -23,7 +23,7 @@ import {
 	WORK_TEXT_SCAN_MAX_ROWS,
 	type WorkItem,
 } from "@cogni/work-items";
-import { rankScoreSql } from "../../../../packages/work-items/src/rank-policy";
+import { rankScoreSql } from "./rank-score-sql";
 import { acquireDoltWriterLocks } from "@cogni-dao/doltgres-admission";
 import postgres, { type Sql } from "postgres";
 import {
@@ -3007,7 +3007,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			const adapterUrl = pathToFileURL(
 				path.join(
 					REPO_ROOT,
-					"packages/work-items/dist/adapters/doltgres/index.js",
+					"app/node_modules/@cogni/work-items/dist/adapters/doltgres/index.js",
 				),
 			).href;
 			const source = `
@@ -3191,7 +3191,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			const adapterUrl = pathToFileURL(
 				path.join(
 					REPO_ROOT,
-					"packages/work-items/dist/adapters/doltgres/index.js",
+					"app/node_modules/@cogni/work-items/dist/adapters/doltgres/index.js",
 				),
 			).href;
 			const children: Array<ReturnType<typeof start>> = [];
@@ -3574,7 +3574,7 @@ if (role === 'original') {
 				/* @vite-ignore */ pathToFileURL(
 					path.join(
 						REPO_ROOT,
-						"packages/knowledge-store/dist/adapters/doltgres/index.js",
+						"app/node_modules/@cogni/knowledge-store/dist/adapters/doltgres/index.js",
 					),
 				).href
 			)) as typeof import("@cogni/knowledge-store/adapters/doltgres");
@@ -3582,7 +3582,7 @@ if (role === 'original') {
 			/* @vite-ignore */ pathToFileURL(
 				path.join(
 					REPO_ROOT,
-					"packages/work-items/dist/adapters/doltgres/index.js",
+					"app/node_modules/@cogni/work-items/dist/adapters/doltgres/index.js",
 				),
 			).href
 		)) as typeof import("@cogni/work-items/adapters/doltgres");

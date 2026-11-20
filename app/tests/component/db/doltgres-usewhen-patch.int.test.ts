@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 import {
   governingFixture,
   GOVERNING_FIXTURE_DOMAIN,
-} from "../../../../packages/knowledge-store/tests/fixtures/governing-index.js";
+} from "../../fixtures/governing-index.js";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
