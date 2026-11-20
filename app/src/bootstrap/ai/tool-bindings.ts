@@ -68,6 +68,7 @@ import {
   REPO_LIST_NAME,
   REPO_OPEN_NAME,
   REPO_SEARCH_NAME,
+  SANDBOX_SHELL_NAME,
   SCHEDULE_LIST_NAME,
   SCHEDULE_MANAGE_NAME,
   VCS_COMMIT_CONTAINS_NAME,
@@ -82,6 +83,7 @@ import {
   WORK_ITEM_READ_NAME,
   WORK_ITEM_ARTIFACT_RECORD_NAME,
   WORK_ITEM_UPDATE_NAME,
+  sandboxShellUnavailableImplementation,
 } from "@cogni/ai-tools";
 
 /**
@@ -193,6 +195,9 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     [REPO_SEARCH_NAME]: createRepoSearchImplementation({
       repoCapability: deps.repoCapability,
     }) as AnyToolImplementation,
+
+    // The 0.24.0 catalog lists the sandbox shell; this node has no sandbox, so the tool answers `unavailable`.
+    [SANDBOX_SHELL_NAME]: sandboxShellUnavailableImplementation as AnyToolImplementation,
 
     [SCHEDULE_LIST_NAME]: createScheduleListImplementation({
       scheduleCapability: deps.scheduleCapability,

@@ -22,7 +22,7 @@ import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake"
 import {
 	governingFixture,
 	GOVERNING_FIXTURE_DOMAIN,
-} from "../../../../../packages/knowledge-store/tests/fixtures/governing-index.js";
+} from "../../../fixtures/governing-index.js";
 import {
 	renderBundleMarkdown,
 	SESSION_BOOTSTRAP_INVARIANTS,

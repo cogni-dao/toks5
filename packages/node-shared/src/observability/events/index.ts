@@ -42,6 +42,9 @@ export const EVENT_NAMES = {
 	// The success twins: one terminal event per accepted create or patch (route or agent tool), ids and counts only.
 	WORK_ITEMS_CREATE_SUCCESS: "work.items.create_success",
 	WORK_ITEMS_PATCH_SUCCESS: "work.items.patch_success",
+	/** The item read route core's one terminal event (story.0085); `tests/contract/work.items.write-events.contract.test.ts` pins these to `WORK_ITEM_READ_EVENTS`. */
+	WORK_ITEMS_GET_SUCCESS: "work.items.get_success",
+	WORK_ITEMS_GET_REFUSED: "work.items.get_refused",
 	// The work-items store's own signals (task.0122): a stage that ran slow or failed (a stage that was fast is a debug line, never info), the status gate's PR read failing, a retired flag written.
 	ADAPTER_WORK_ITEMS_STAGE_START: "adapter.work_items.stage_start",
 	ADAPTER_WORK_ITEMS_STAGE_COMPLETE: "adapter.work_items.stage_complete",

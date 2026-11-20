@@ -1,3 +1,0 @@
-/* Scan workspace source and immutable published JavaScript. */
-@source "./src/**/*.{ts,tsx}";
-@source "./dist/**/*.js";

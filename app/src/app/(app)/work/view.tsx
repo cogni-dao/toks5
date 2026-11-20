@@ -81,7 +81,7 @@ import { Button } from "@/components/startup";
 import { type WorkIntent, useWorkNavigation } from "./WorkNavigationBoundary";
 import {
   fetchWorkBoard,
-  fetchWorkItem,
+  workItemClient,
   fetchWorkItems,
 } from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
@@ -94,6 +94,7 @@ import {
   WorkResponsiveTable,
 } from "./_components/WorkResponsiveTable";
 import {
+  withoutItemScopedParams,
   workItemHref,
   workListHref,
   workViewHref,
@@ -197,9 +198,14 @@ export function WorkDashboardView({
   );
   const boardView = desired.params.get("view") !== "table";
   const cursor = searchParams.get("cursor") ?? "";
+  // story.0058, story.0085: the package client reads every part the view draws, and the selected artifact in full.
+  const selectedArtifact = searchParams.get("artifact") ?? undefined;
   const selectedItemQuery = useQuery({
-    queryKey: ["work-item", selectedItemId],
-    queryFn: ({ signal }) => fetchWorkItem(selectedItemId as string, signal),
+    queryKey: ["work-item", selectedItemId, selectedArtifact ?? null],
+    queryFn: ({ signal }) =>
+      workItemClient.fetchItem(selectedItemId as string, { artifact: selectedArtifact }, signal),
+    // Selecting another artifact of the same item keeps the item on screen while it loads.
+    placeholderData: (previous) => (previous?.id === selectedItemId ? previous : undefined),
     enabled: selectedItemId !== undefined,
     retry: false,
     staleTime: 30_000,
@@ -453,13 +459,20 @@ export function WorkDashboardView({
   const openItem = useCallback(
     (item: WorkItemSummary) => {
       detailOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      editIntent((intent) => ({ ...intent, itemId: item.id, method: "push" }));
+      // ITEM_SCOPED_PARAMS: another item never inherits the open item's artifact or ref cursors.
+      editIntent((intent) => ({
+        ...intent,
+        params: withoutItemScopedParams(intent.params),
+        itemId: item.id,
+        method: "push",
+      }));
     },
     [editIntent],
   );
   const closeItem = useCallback(() => {
     editIntent((intent) => ({
       ...intent,
+      params: withoutItemScopedParams(intent.params),
       itemId: undefined,
       method: "replace",
     }));

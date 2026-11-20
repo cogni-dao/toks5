@@ -53,6 +53,17 @@ export function scopeUserId(scope: ExecutionScope): string | undefined {
   return scope.subjectUserId ?? scope.principalId;
 }
 
+/**
+ * The actor of a write made inside a run: the run's own acting principal. Fails closed when the scope names none
+ * (never falls back to the subject: a run with no principal writes nothing).
+ */
+export function actingPrincipal(scope: ExecutionScope): string {
+  if (!scope.principalId) {
+    throw new Error("write denied: the run has no acting principal");
+  }
+  return scope.principalId;
+}
+
 const executionScopeStorage = new AsyncLocalStorage<ExecutionScope>();
 
 /**

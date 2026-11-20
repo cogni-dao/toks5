@@ -11,17 +11,16 @@ import type { WorkItemDto } from "@cogni/node-contracts";
 import { cleanup, fireEvent, render as renderUi, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRef, useRef, useState, type ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkItemFetchError } from "@/app/(app)/work/_api/fetchWorkItems";
 import { WorkItemDetail } from "@/app/(app)/work/_components/WorkItemDetail";
 import { WorkDetailSheet } from "@/app/(app)/work/_components/WorkDetailSheet";
 
-vi.mock("@/app/(app)/work/_components/work-item-icons", () => ({ TypeIcon: () => null, StatusPill: () => null }));
-
-vi.mock("@/app/(app)/_components/EntityCitationLinks", () => ({
-  EntityCitationLinks: () => null,
-}));
+// The view reads Links and Expectations through the package client; no node server runs here.
+beforeEach(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 503 }));
+});
 
 const item: WorkItemDto = {
   id: "task.5174",
@@ -133,6 +132,156 @@ describe("WorkItemDetail accessibility", () => {
 
     expectAccessibleDialog(item.title, /Details for task\.5174/);
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+  it("leads with every PR, then links the design atoms (story.0069)", () => {
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          specRefs: ["knowledge:work-item-design-links"],
+          pr: "https://github.com/cogni-dao/node-template/pull/425",
+          externalRefs: [
+            { system: "github", kind: "pr", url: "https://github.com/cogni-dao/red/pull/45" },
+            { system: "github", kind: "pr", url: "https://github.com/cogni-dao/node-template/pull/425" },
+            { system: "github", kind: "issue", url: "https://github.com/cogni-dao/node-template/issues/1" },
+          ],
+        }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    const prs = screen.getAllByRole("link", { name: /^pr / });
+    expect(prs.map((link) => link.getAttribute("href"))).toEqual([
+      "https://github.com/cogni-dao/node-template/pull/425",
+      "https://github.com/cogni-dao/red/pull/45",
+    ]);
+    expect(prs[0]).toHaveAttribute("target", "_blank");
+    const links = screen.getAllByRole("link");
+    expect(links.indexOf(prs[0] as HTMLElement)).toBe(0);
+    expect(screen.getByRole("link", { name: "design work-item-design-links" })).toHaveAttribute(
+      "href",
+      "/knowledge/work-item-design-links"
+    );
+  });
+  it("finds the roadmap on a later links page, and never says none while links remain unread (story.0069)", async () => {
+    const link = (n: number, over: Record<string, unknown> = {}) => ({
+      id: `c${n}`,
+      direction: "out",
+      citationType: "supports",
+      source: { id: item.id, kind: "work", title: null, href: `/work/items/${item.id}` },
+      target: { id: `atom-${n}`, kind: "knowledge", title: null, href: `/knowledge/atom-${n}` },
+      context: null,
+      label: "supports",
+      tone: "positive",
+      ...over,
+    });
+    const tracks = link(6, {
+      direction: "in",
+      citationType: "tracks",
+      source: { id: "roadmap-ai-work-converges", kind: "knowledge", title: null, href: "/knowledge/roadmap-ai-work-converges" },
+      target: { id: item.id, kind: "work", title: null, href: `/work/items/${item.id}` },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input).includes("/api/v1/citations/")
+        ? new Response(JSON.stringify({ links: [tracks], nextCursor: null }), { status: 200 })
+        : new Response("{}", { status: 503 })
+    );
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          links: { items: [1, 2, 3, 4, 5].map((n) => link(n)), nextCursor: "c5" },
+        } as never}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByRole("link", { name: "roadmap roadmap-ai-work-converges" })).toHaveAttribute(
+      "href",
+      "/knowledge/roadmap-ai-work-converges"
+    );
+    expect(fetchSpy.mock.calls.map((call) => String(call[0]))).toContain("/api/v1/citations/task.5174?cursor=c5");
+  });
+  it("shows artifact and history refs, and the selected validation's scorecard, only when the read carries them", () => {
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          artifactRefs: {
+            refs: [
+              { id: "wia-2", seq: 2, kind: "validation", verdict: "pass", passGrade: true, subject: "s", itemRevision: 3, createdAt: "2026-10-03T00:00:00.000Z" },
+              { id: "wia-1", seq: 1, kind: "design_review", verdict: "request_changes", subject: "s", itemRevision: 2, createdAt: "2026-10-02T00:00:00.000Z" },
+            ],
+            nextCursor: 1,
+          },
+          historyRefs: {
+            refs: [{ version: "2", commit: "c2", at: "2026-10-03T00:00:00.000Z", actor: null, reason: null, cites: [], changed: ["status"] }],
+            nextCursor: null,
+          },
+          artifact: {
+            id: "wia-2", itemId: item.id, seq: 2, itemRevision: 3, kind: "validation", subject: "s", verdict: "pass", author: "u",
+            createdAt: "2026-10-03T00:00:00.000Z",
+            rows: [{ tweak: "REFS ROUTE", human: "—", ai: "🟢", loki: "🟢", trace: "—", overall: "🟢 PASS" }],
+          },
+        }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    // Drawn like Moves: one bordered list of CitationRows, below Moves; the selected one opens inline and its link closes it.
+    expect(screen.getByRole("link", { name: /request changes Design review 1 · this item/ })).toHaveAttribute(
+      "href",
+      "/work/items/task.5174?artifact=wia-1",
+    );
+    expect(screen.getByRole("link", { name: /pass Validation 1 · this item/ })).toHaveAttribute("href", "/work/items/task.5174");
+    expect(screen.getAllByText(/^Artifacts?$/)).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Older" })).toHaveAttribute("href", "/work/items/task.5174?artifactsCursor=1");
+    expect(screen.getByText("Created")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "REFS ROUTE" })).toBeInTheDocument();
+  });
+
+  it("says the artifact is not found, and the reviews unavailable, instead of an empty answer", () => {
+    render(
+      <WorkItemDetail
+        item={{ ...item, artifactRefs: { refs: [], nextCursor: null, unavailable: true }, artifact: { notFound: true } }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Artifact not found")).toBeInTheDocument();
+    expect(screen.getByText("Reviews are unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
+  });
+
+  it("opens a selected artifact that is not on the shown page below the list", () => {
+    render(
+      <WorkItemDetail
+        item={{
+          ...item,
+          artifactRefs: { refs: [], nextCursor: null },
+          artifact: {
+            id: "wia-9", itemId: item.id, seq: 9, itemRevision: 3, kind: "design_review", subject: "s", verdict: "approve",
+            author: "u", createdAt: "2026-10-03T00:00:00.000Z", body: "Older review text",
+          },
+        }}
+        itemId={item.id}
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Older review text")).toBeInTheDocument();
+  });
+
+  it("renders no Artifacts or History section for a read without those parts", () => {
+    render(<WorkItemDetail item={item} itemId={item.id} open onOpenChange={vi.fn()} />);
+    expect(screen.queryByText("Artifacts")).not.toBeInTheDocument();
+    expect(screen.queryByText("History")).not.toBeInTheDocument();
   });
 });
 

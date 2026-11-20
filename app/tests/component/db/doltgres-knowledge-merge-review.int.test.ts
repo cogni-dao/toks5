@@ -8,7 +8,7 @@ import {
 	Wait,
 } from "testcontainers";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { readKnowledgeMerges } from "../../../../packages/metrics/src/sources";
+import { readKnowledgeMerges } from "@cogni-dao/metrics/sources";
 
 let container: StartedTestContainer | undefined;
 let knowledge: Sql;

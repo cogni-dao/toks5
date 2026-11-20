@@ -110,6 +110,7 @@ export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
   core__vcs_create_branch: "calls the operator VCS API, not a node route",
   core__vcs_merge_pr: "calls the operator VCS API, not a node route",
   core__vcs_flight_candidate: "calls the operator VCS API, not a node route",
+  core__sandbox_shell: "runs a command in the node's own sandbox lease; no node route twins a shell",
 };
 
 /**

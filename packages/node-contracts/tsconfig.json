@@ -31,16 +31,10 @@
       "path": "../aragon-osx"
     },
     {
-      "path": "../knowledge-store"
-    },
-    {
       "path": "../node-core"
     },
     {
       "path": "../scheduling"
-    },
-    {
-      "path": "../work-items"
     }
   ]
 }

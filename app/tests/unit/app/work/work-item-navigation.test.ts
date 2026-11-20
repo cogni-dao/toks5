@@ -109,3 +109,15 @@ describe("work-item permalink navigation", () => {
     expect(params.get("rankMax")).toBe("");
   });
 });
+
+describe("item-scoped parameters (story.0058)", () => {
+  const scoped = new URLSearchParams("q=permalink&artifact=wia-1&artifactsCursor=4&historyCursor=abc");
+
+  it("another item, or the list, never inherits the open item's artifact or ref cursors", () => {
+    const router = { push: vi.fn(), replace: vi.fn() };
+    openWorkItemPermalink(router, "story.5000", scoped);
+    closeWorkItemPermalink(router, scoped);
+    expect(router.push).toHaveBeenCalledWith("/work/items/story.5000?q=permalink", { scroll: false });
+    expect(router.replace).toHaveBeenCalledWith("/work?q=permalink", { scroll: false });
+  });
+});
