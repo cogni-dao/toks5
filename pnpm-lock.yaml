@@ -162,6 +162,9 @@ importers:
       '@cogni/substrate-health':
         specifier: workspace:@cogni-dao/substrate-health@*
         version: link:../packages/substrate-health
+      '@cogni/ui-theme':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz
+        version: '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz'
       '@cogni/work-items':
         specifier: workspace:@cogni-dao/work-items@*
         version: link:../packages/work-items
@@ -1632,6 +1635,11 @@ packages:
 
   '@cogni-dao/node-declarations@https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz}
+    version: 0.1.0
+    hasBin: true
+
+  '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz}
     version: 0.1.0
     hasBin: true
 
@@ -10215,6 +10223,8 @@ snapshots:
     dependencies:
       yaml: 2.9.0
       zod: 3.25.76
+
+  '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz': {}
 
   '@coinbase/cdp-sdk@1.51.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)':
     dependencies:
