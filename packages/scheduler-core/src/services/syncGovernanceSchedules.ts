@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/scheduler-core/services/syncGovernanceSchedules`
  * Purpose: Sync governance schedules from config to Temporal. Pure orchestration — depends only on ports and types.
- * Scope: Creates/updates/resumes Temporal schedules for each charter in governance config; pauses schedules removed from config. Routes LEDGER_INGEST charters to CollectEpochWorkflow with versioned LedgerIngestRunV1 envelope. Does not manage tenant-facing schedule CRUD or workflow execution.
+ * Scope: Reconciles node-scoped governance schedules; ledger collection is operator-owned.
  * Invariants:
  *   - OVERLAP_SKIP_DEFAULT: All governance schedules use overlap=SKIP (enforced by ScheduleControlPort)
  *   - CATCHUP_WINDOW_ZERO: No backfill (enforced by ScheduleControlPort)
@@ -24,6 +24,17 @@
  */
 
 import { isDeepStrictEqual } from "node:util";
+import {
+  governanceScheduleId,
+  isLegacyFlatGovernanceScheduleId,
+  isOperatorOwnedGovernanceCharter,
+  isOwnGovernanceScheduleId,
+} from "@cogni/scheduling";
+export {
+  governanceScheduleId,
+  isLegacyFlatGovernanceScheduleId,
+  isOwnGovernanceScheduleId,
+} from "@cogni/scheduling";
 
 import type { JsonValue } from "type-fest";
 
@@ -47,12 +58,6 @@ const GOVERNANCE_MODEL = "kimi-k2.5";
  * key the schedules UI and pr-review use for platform model ids.
  */
 const PLATFORM_PROVIDER_KEY = "platform";
-
-/** Workflow type for ledger ingestion */
-const COLLECT_EPOCH_WORKFLOW_TYPE = "CollectEpochWorkflow";
-
-/** Task queue for ledger activities */
-const LEDGER_TASK_QUEUE = "ledger-tasks";
 
 /** Minimal governance schedule shape (no @/ imports — pure type) */
 export interface GovernanceScheduleEntry {
@@ -164,33 +169,6 @@ export interface GovernanceScheduleSyncResult {
 }
 
 /**
- * Derives the Temporal schedule ID from a charter name.
- * Format: `governance:{charter_lowercase}`
- */
-export function governanceScheduleId(charter: string): string {
-  return `governance:${charter.toLowerCase()}`;
-}
-
-/**
- * True for a schedule id this node's flat governance sync OWNS: the two-segment
- * `governance:{charter}` form produced by {@link governanceScheduleId}.
- *
- * CROSS_TENANT_PRUNE (bug.5009): all nodes in an env share ONE Temporal namespace
- * and each boot-syncs into it. The operator creates node-scoped dispatch schedules
- * `governance:{nodeId}:{charter}` (THREE segments) to collect INTO each node. A node's
- * prune must NEVER pause those — only its own two-segment ids — or every node's
- * boot-sync pauses its siblings' (and its own) dispatch schedules, and a paused
- * schedule skips its cron (still fires on manual trigger), so epochs only ever
- * appear on an operator boot-kick. Node ids are UUIDs (no colons), so segment count
- * cleanly distinguishes `governance:{charter}` (own) from `governance:{nodeId}:{charter}`.
- */
-export function isOwnGovernanceScheduleId(scheduleId: string): boolean {
-  return (
-    scheduleId.startsWith("governance:") && scheduleId.split(":").length === 2
-  );
-}
-
-/**
  * Checks whether the desired schedule config differs from the current Temporal state.
  * NOTE: cron comparison is skipped when desc.cron is null (Temporal compiles crons
  * to calendars, so the original string isn't available). Input + timezone cover
@@ -247,39 +225,19 @@ export async function syncGovernanceSchedules(
   const configScheduleIds = new Set<string>();
 
   for (const schedule of config.schedules) {
-    const scheduleId = governanceScheduleId(schedule.charter);
+    const scheduleId = governanceScheduleId(deps.nodeId, schedule.charter);
+    if (isOperatorOwnedGovernanceCharter(schedule.charter)) {
+      log.info({ scheduleId }, "Skipping operator-owned ledger schedule");
+      result.skipped.push(scheduleId);
+      continue;
+    }
     configScheduleIds.add(scheduleId);
 
-    // Determine if this is a LEDGER_INGEST schedule (different workflow + queue)
-    const isLedgerIngest = schedule.charter.toUpperCase() === "LEDGER_INGEST";
-
     let desiredInput: JsonValue;
-    let workflowType: string | undefined;
-    let taskQueueOverride: string | undefined;
     let graphId: string;
     let grantId: string;
 
-    if (isLedgerIngest && config.ledger) {
-      desiredInput = {
-        version: 1,
-        scopeId: config.ledger.scopeId,
-        scopeKey: config.ledger.scopeKey,
-        epochLengthDays: config.ledger.epochLengthDays,
-        activitySources: config.ledger.activitySources,
-        ...(config.ledger.baseIssuanceCredits && {
-          baseIssuanceCredits: config.ledger.baseIssuanceCredits,
-        }),
-        ...(config.ledger.approvers &&
-          config.ledger.approvers.length > 0 && {
-            approvers: config.ledger.approvers,
-          }),
-      };
-      workflowType = COLLECT_EPOCH_WORKFLOW_TYPE;
-      taskQueueOverride = LEDGER_TASK_QUEUE;
-      // Ledger workflows don't use graph/grant auth, but CreateScheduleParams requires graphId
-      graphId = "ledger:ingest";
-      grantId = governanceGrantId;
-    } else if (schedule.graph !== undefined && !isLedgerIngest) {
+    if (schedule.graph !== undefined) {
       // GRAPH_CHARTER (task.5282): run the declared catalog graph through the default
       // GraphRunWorkflow. The input mirrors a user-created graph schedule — the
       // entrypoint as the single user message plus an explicit platform `modelRef`
@@ -341,8 +299,6 @@ export async function syncGovernanceSchedules(
       input: desiredInput,
       overlapPolicy: "skip",
       catchupWindowMs: 0,
-      workflowType,
-      taskQueueOverride,
     };
 
     try {
@@ -372,7 +328,7 @@ export async function syncGovernanceSchedules(
         // The description omits graph/grant and canonical cron. Reapply graph
         // charters in full so rotations, graph-only changes and equal-next-tick
         // cadence changes converge, including while paused.
-        const reapplyGraph = schedule.graph !== undefined && !isLedgerIngest;
+        const reapplyGraph = schedule.graph !== undefined;
 
         if (reapplyGraph || configChanged || linkDrift) {
           await scheduleControl.updateSchedule(scheduleId, desiredParams);
@@ -399,14 +355,16 @@ export async function syncGovernanceSchedules(
   }
 
   // 3. Prune: pause governance schedules not in current config — but ONLY the
-  // ones THIS node owns (its flat `governance:{charter}` ids). The shared Temporal
-  // namespace also holds the operator's node-scoped `governance:{nodeId}:{charter}`
-  // dispatch schedules; pausing those (CROSS_TENANT_PRUNE / bug.5009) is what stopped
-  // beacon/poly prod epochs from self-sustaining. See {@link isOwnGovernanceScheduleId}.
+  // ones THIS node owns. Flat IDs are never changed in shared Temporal; only
+  // the system-owned local database row is disabled.
   const allGovernanceIds = await deps.listGovernanceScheduleIds();
   for (const existingId of allGovernanceIds) {
+    if (isLegacyFlatGovernanceScheduleId(existingId)) {
+      await deps.disableSchedule(existingId);
+      continue;
+    }
     if (
-      isOwnGovernanceScheduleId(existingId) &&
+      isOwnGovernanceScheduleId(deps.nodeId, existingId) &&
       !configScheduleIds.has(existingId)
     ) {
       try {

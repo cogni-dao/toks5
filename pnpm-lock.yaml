@@ -169,8 +169,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/scheduler-core
       '@cogni/scheduling':
-        specifier: workspace:@cogni-dao/scheduling@*
-        version: link:../packages/scheduling
+        specifier: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz
+        version: '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz(postgres@3.4.9)'
       '@cogni/substrate-health':
         specifier: workspace:@cogni-dao/substrate-health@*
         version: link:../packages/substrate-health
@@ -672,8 +672,8 @@ importers:
         specifier: workspace:*
         version: link:../scheduler-core
       '@cogni/scheduling':
-        specifier: workspace:@cogni-dao/scheduling@*
-        version: link:../scheduling
+        specifier: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz
+        version: '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz(postgres@3.4.9)'
       cron-parser:
         specifier: ^4.9.0
         version: 4.9.0
@@ -963,8 +963,8 @@ importers:
         specifier: workspace:*
         version: link:../node-core
       '@cogni/scheduling':
-        specifier: workspace:@cogni-dao/scheduling@*
-        version: link:../scheduling
+        specifier: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz
+        version: '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz(postgres@3.4.9)'
       '@cogni/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.24.0/cogni-dao-work-items-0.24.0.tgz
         version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.24.0/cogni-dao-work-items-0.24.0.tgz'
@@ -1223,8 +1223,8 @@ importers:
         specifier: workspace:*
         version: link:../ids
       '@cogni/scheduling':
-        specifier: workspace:@cogni-dao/scheduling@*
-        version: link:../scheduling
+        specifier: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz
+        version: '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz(postgres@3.4.9)'
       type-fest:
         specifier: ^5.4.1
         version: 5.7.0
@@ -1526,6 +1526,15 @@ packages:
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz}
     version: 0.1.0
     hasBin: true
+
+  '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz':
+    resolution: {integrity: sha512-KZHl+FkQ4NIFzsPERh5OOoFO8+kezLh/6oAi9ICtCO9FIh69fnkKv3fktKS6MveG2u9toWnuiHg7FuGsXWKOpw==, tarball: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz}
+    version: 0.2.0
+    peerDependencies:
+      postgres: ^3.4.5
+    peerDependenciesMeta:
+      postgres:
+        optional: true
 
   '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz}
@@ -10157,6 +10166,12 @@ snapshots:
     dependencies:
       yaml: 2.9.0
       zod: 3.25.76
+
+  '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz(postgres@3.4.9)':
+    dependencies:
+      zod: 4.4.3
+    optionalDependencies:
+      postgres: 3.4.9
 
   '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz': {}
 
