@@ -36,7 +36,7 @@
     "drizzle-orm": "^0.44.7",
     "postgres": "^3.4.5",
     "type-fest": "^5.4.1",
-    "@cogni/scheduling": "workspace:@cogni-dao/scheduling@*"
+    "@cogni/scheduling": "https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.2.0/cogni-dao-scheduling-0.2.0.tgz"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
