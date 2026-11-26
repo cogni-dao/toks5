@@ -10,6 +10,7 @@ import {
 	createGoalProgressReader,
 	createGoalSource,
 } from "@cogni-dao/metrics/knowledge";
+import { createKnowledgeUsageCalculator } from "@cogni-dao/metrics/usage";
 import type { Sql } from "postgres";
 import { z } from "zod";
 import {
@@ -20,6 +21,7 @@ import {
 	RUN_CALLER_CLASSES,
 	readRunsByCaller,
 } from "@/adapters/server/metrics/runs.source";
+import type { MetricsQueryPort } from "@/ports";
 import { getNodeId } from "@/shared/config";
 
 export { createGoalProgressReader, createGoalSource };
@@ -113,12 +115,23 @@ export function createGoalMetrics(deps: {
 	observationsSql: Sql;
 	environment: string;
 	log(event: object): void;
+	/** Read by `http.requests@1`; absent reads unknown (`prometheus:not_configured`). */
+	metricsQuery?: MetricsQueryPort;
 }) {
+	const { metricsQuery, ...rest } = deps;
 	return createPublishedGoalMetrics({
-		...deps,
+		...rest,
 		node: getNodeId(),
+		...(metricsQuery
+			? {
+					// The operator lane scrape labels every series with node and env (bug.5641), and the
+					// node-scoped read proxy confines each query to them (story.5169); no `app` matcher.
+					prometheus: { query: metricsQuery },
+				}
+			: {}),
 		nodeCalculators: [
 			createRunsCountCalculator(deps.observationsSql),
+			createKnowledgeUsageCalculator(deps.observationsSql),
 			createValidatedByAuthorCalculator(deps.knowledgeSql, deps.observationsSql),
 		],
 	});

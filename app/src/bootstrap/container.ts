@@ -12,6 +12,11 @@
  * @public
  */
 
+import {
+	CitePairRecorder,
+	KnowledgeReadCounter as PostgresKnowledgeReadCounter,
+	type UsageLogEvent,
+} from "@cogni-dao/metrics/usage";
 import type { ToolSourcePort } from "@cogni/ai-core";
 import type {
 	EdoCapability,
@@ -121,6 +126,8 @@ import {
 	ViemTreasuryAdapter,
 } from "@/adapters/server";
 import { ServiceDrizzleAccountService } from "@/adapters/server/accounts/drizzle.adapter";
+import { findExecutionScope } from "@/adapters/server/ai/execution-scope";
+import { withReadCounting } from "@/adapters/server/knowledge-usage/counting-knowledge-capability";
 import {
 	AggregatingModelCatalog,
 	ProviderResolver,
@@ -197,6 +204,7 @@ import type {
 	ConnectionBrokerPort,
 	DataSourceRegistration,
 	GovernanceStatusPort,
+	KnowledgeReadCounter,
 	LangfusePort,
 	LlmService,
 	MetricsQueryPort,
@@ -233,7 +241,7 @@ import {
 	getStewardWalletConfig,
 } from "@/shared/config";
 import { serverEnv } from "@/shared/env/server-env";
-import { makeLogger } from "@/shared/observability";
+import { logEvent, makeLogger } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
 
@@ -326,6 +334,8 @@ export interface Container {
 	doltgresWorkItems: WorkItemsDoltgresPort;
 	/** Review and validation artifacts of work items (task.0028): the item store and the insert-only artifact store. Undefined when DOLTGRES_URL is unset. */
 	workItemArtifacts: WorkItemArtifactDeps | undefined;
+	/** Write-time daily counters of agent atom reads (story.0061): batched, never blocks or fails the caller. */
+	knowledgeReadCounter: KnowledgeReadCounter;
 	/** Run event streaming — publish/subscribe via Redis Streams */
 	runStream: RunStreamPort;
 	/** Node-level event streaming — undefined when REDIS_URL not set */
@@ -713,6 +723,20 @@ function createContainer(): Container {
 	const paymentAttemptServiceRepository =
 		new ServiceDrizzlePaymentAttemptRepository(serviceDb);
 
+	// story.0061: the shared usage writers log through this node's registered events.
+	const usageLog = log.child({ component: "KnowledgeUsage" });
+	const logUsage = ({ event, ...fields }: UsageLogEvent) =>
+		logEvent(usageLog, event, fields);
+	const knowledgeReadCounter = new PostgresKnowledgeReadCounter(
+		serviceDb.$client,
+		logUsage,
+	);
+	const flushReadCounts = () => {
+		void knowledgeReadCounter.flush();
+	};
+	process.on("SIGTERM", flushReadCounts);
+	process.on("SIGINT", flushReadCounts);
+
 	// User-facing scheduling (appDb, RLS enforced)
 	const executionGrantPort = new DrizzleExecutionGrantUserAdapter(
 		db,
@@ -880,6 +904,22 @@ function createContainer(): Container {
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log }),
 		);
+		// story.0061: a successful patch also records the (atom, item) pairs it cites; the route and the agent tool share
+		// this patch, and the record never fails or delays it. `withWorkItemLeases` returns a plain object, so the spread keeps every method.
+		{
+			const citePairs = new CitePairRecorder(serviceDb.$client, logUsage);
+			const leased = doltgresWorkItems;
+			doltgresWorkItems = {
+				...leased,
+				async patch(input, principalId) {
+					const item = await leased.patch(input, principalId);
+					if (input.cites?.length) {
+						citePairs.record(item.id, item.revision, input.cites);
+					}
+					return item;
+				},
+			};
+		}
 		// task.0028: artifacts go through the work-items writer path. The artifact records its author for audit; no
 		// server check compares it with the subject's author.
 		workItemArtifacts = doltgresWorkItems.artifacts
@@ -913,6 +953,7 @@ function createContainer(): Container {
 			knowledgeSql: doltClient,
 			observationsSql: serviceDb.$client,
 			environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
+			metricsQuery,
 			// Compute receipts and skipped invalid definitions must reach Loki.
 			log: (event) => log.info(event, "metric.event"),
 		});
@@ -940,6 +981,15 @@ function createContainer(): Container {
 					}),
 				);
 			};
+		// After the listActiveGoals reassignment, so the spread keeps it (story.0061).
+		knowledgeCapability = withReadCounting(
+			knowledgeCapability,
+			knowledgeReadCounter,
+			() => {
+				const scope = findExecutionScope();
+				return scope ? { principalId: scope.principalId } : undefined;
+			},
+		);
 
 		const edoResolver = new DoltgresEdoResolverAdapter({
 			sql: doltClient,
@@ -1271,6 +1321,7 @@ function createContainer(): Container {
 		serviceLinks,
 		nodeAdminPort: createNodeAdminPort(agentAuthority),
 		knowledgeStorePort,
+		knowledgeReadCounter,
 		goalMetrics,
 		goalProgress,
 		edoCapability,
