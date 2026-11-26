@@ -169,6 +169,7 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       "payer-bindings.revoke",
       // Node-admin only through the one admin check, any credential: signs and posts one ask to a configured node, writes no grant on either side.
       "service-links.ask",
+      "work.items.delete",
     ]);
   });
 

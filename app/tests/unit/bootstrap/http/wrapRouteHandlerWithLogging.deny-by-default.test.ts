@@ -14,9 +14,12 @@ import type { SessionUser } from "@cogni/node-shared";
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const fake = vi.hoisted(() => ({ container: undefined as unknown }));
+const fake = vi.hoisted(() => ({ container: undefined as unknown, session: null as SessionUser | null }));
+vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: async () => fake.session }));
+vi.mock("@/app/_facades/work/items.server", () => ({ getWorkItem: vi.fn(), patchWorkItem: vi.fn(), NodeAdminRequiredError: class extends Error {}, WorkItemForbiddenError: class extends Error {}, WorkItemNotFoundError: class extends Error {} }));
 vi.mock("@/bootstrap/container", () => ({ getContainer: () => fake.container }));
 
+import { DELETE as deleteWorkItem } from "@/app/api/v1/work/items/[id]/route";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http/wrapRouteHandlerWithLogging";
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
@@ -48,6 +51,17 @@ beforeEach(() => {
 });
 
 describe("DENY_BY_DEFAULT (real wrapper)", () => {
+  it("returns cancellation advice to an authenticated bearer through the real retired route", async () => {
+    fake.session = user("bearer");
+    const request = new NextRequest("https://node.example/api/v1/work/items/task.0032", { method: "DELETE", headers: { authorization: "Bearer test" } });
+    const context = { params: Promise.resolve({ id: "task.0032" }) };
+    const res = await deleteWorkItem(request, context);
+    expect(res.status).toBe(410);
+    expect(await res.json()).toMatchObject({ error: "work_item_deletion_retired", message: expect.stringContaining("cancelled") });
+    expect(authorizeRoute).not.toHaveBeenCalled();
+    fake.session = null;
+    expect((await deleteWorkItem(request, context)).status).toBe(401);
+  });
   it.each(["POST", "PUT", "PATCH", "DELETE"])("a bearer %s on a route that declares nothing is 403 bearer_write_undeclared, no-store, and the handler never runs", async (method) => {
     const res = await call({}, user("bearer"), method);
     expect(res.status).toBe(403);

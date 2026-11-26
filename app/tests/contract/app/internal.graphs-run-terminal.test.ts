@@ -21,6 +21,8 @@ const VIRTUAL_KEY_ID = "30000000-0000-4000-a000-000000000001";
 const mocks = vi.hoisted(() => ({
   runGraph: vi.fn(),
   scopedSignal: undefined as AbortSignal | undefined,
+  scopedRunKind: undefined as string | undefined,
+  patchRunStateKey: vi.fn().mockResolvedValue(undefined),
   checkIdempotency: vi.fn().mockResolvedValue({ status: "new" }),
   createPendingRequest: vi.fn().mockResolvedValue({
     status: "claimed",
@@ -80,8 +82,9 @@ vi.mock("@/bootstrap/graph-executor.factory", () => {
   };
   return {
     createGraphExecutor: () => executor,
-    createScopedGraphExecutor: (params: { abortSignal?: AbortSignal }) => {
+    createScopedGraphExecutor: (params: { abortSignal?: AbortSignal; runKind?: string }) => {
       mocks.scopedSignal = params.abortSignal;
+      mocks.scopedRunKind = params.runKind;
       return executor;
     },
   };
@@ -97,6 +100,7 @@ vi.mock("@/bootstrap/container", () => ({
     },
     graphRunRepository: {
       markRunCompleted: mocks.markRunCompleted,
+      patchRunStateKey: mocks.patchRunStateKey,
       getRunByRunId: mocks.getRunByRunId,
     },
     accountsForUser: () => ({}),
@@ -125,36 +129,44 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.scopedSignal = undefined;
+    mocks.scopedRunKind = undefined;
     mocks.checkIdempotency.mockResolvedValue({ status: "new" });
-    mocks.getRunByRunId.mockResolvedValue(null);
+    mocks.getRunByRunId.mockImplementation(async () => ({ runId: RUN_ID, runKind: "user_immediate", graphId: "langgraph:default" }));
   });
 
   it.each(["cogni", "work-prioritizer"])("marks only a validated schedule of %s unattended", async (graph) => {
     for (const scheduled of [false, true]) {
       mocks.runGraph.mockClear();
-      mocks.getRunByRunId.mockResolvedValue(scheduled ? { runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: `langgraph:${graph}`, triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") } : null);
+      mocks.getRunByRunId.mockResolvedValue(scheduled ? { runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: `langgraph:${graph}`, triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") } : { runId: RUN_ID, runKind: "user_immediate", graphId: `langgraph:${graph}` });
       await POST(new NextRequest(`http://localhost/api/internal/graphs/langgraph:${graph}/runs`, {
         method: "POST",
         headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": scheduled ? "schedule:2026-01-01T00:00:00.000Z" : "api:test" },
         body: JSON.stringify({ executionGrantId: scheduled ? "40000000-0000-4000-a000-000000000001" : null, runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" }, actorUserId: USER_ID, billingAccountId: BILLING_ID, virtualKeyId: VIRTUAL_KEY_ID } }),
       }), { params: Promise.resolve({ graphId: `langgraph:${graph}` }) });
       expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), scheduled ? expect.objectContaining({ unattended: true }) : expect.not.objectContaining({ unattended: expect.anything() }));
+      expect(mocks.scopedRunKind).toBe(scheduled ? "system_scheduled" : "user_immediate");
       expect(mocks.scopedSignal).toBeInstanceOf(AbortSignal);
       expect(mocks.scopedSignal?.aborted).toBe(false);
     }
   });
 
   it.each([
-    { runKind: "system_webhook", triggerSource: "webhook", graphId: "langgraph:work-prioritizer", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
-    { runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:other", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
+    { runId: RUN_ID, runKind: "system_webhook", triggerSource: "webhook", graphId: "langgraph:work-prioritizer", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
+    { runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:other", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
     null,
-  ])("does not mark unverified grant-backed runs unattended", async (record) => {
+    { runId: RUN_ID, runKind: null, graphId: "langgraph:work-prioritizer" },
+    { runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:work-prioritizer", triggerRef: "wrong", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
+  ])("refuses unverified run facts before mutation or execution", async (record) => {
     mocks.getRunByRunId.mockResolvedValue(record);
-    await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:work-prioritizer/runs", {
+    const response = await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:work-prioritizer/runs", {
       method: "POST", headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": "schedule:2026-01-01T00:00:00.000Z" },
       body: JSON.stringify({ executionGrantId: "40000000-0000-4000-a000-000000000001", runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" } } }),
     }), { params: Promise.resolve({ graphId: "langgraph:work-prioritizer" }) });
-    expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.not.objectContaining({ unattended: expect.anything() }));
+    expect(response.status).toBe(409);
+    expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    expect(mocks.patchRunStateKey).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
   });
 
   it("aborts cooperative execution at the host deadline", async () => {

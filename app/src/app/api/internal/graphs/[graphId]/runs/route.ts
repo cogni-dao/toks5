@@ -244,6 +244,24 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         requestHash
       );
 
+    // The durable ledger is the authority for execution attribution, including on
+    // cached retries. Never execute or mutate a run whose facts are absent or
+    // disagree with this invocation.
+    const ledgerRunId = idempotencyResult.status === "cached" || idempotencyResult.status === "stale"
+      ? idempotencyResult.request.runId
+      : runId;
+    const ledgerRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, ledgerRunId);
+    const scheduled = ledgerRun?.runKind === "system_scheduled";
+    const validKind = ledgerRun?.runKind === "user_immediate" || scheduled || ledgerRun?.runKind === "system_webhook";
+    const validSchedule = !scheduled || (Boolean(executionGrantId) &&
+      ledgerRun.triggerSource === "temporal_schedule" && ledgerRun.triggerRef !== null &&
+      ledgerRun.scheduledFor instanceof Date && !Number.isNaN(ledgerRun.scheduledFor.getTime()) &&
+      idempotencyKey === `${ledgerRun.triggerRef}:${ledgerRun.scheduledFor.toISOString()}`);
+    if (!ledgerRun || !ledgerRun.runKind || ledgerRun.runId !== ledgerRunId || ledgerRun.graphId !== graphId || !validKind || !validSchedule || (executionGrantId && !scheduled)) {
+      log.warn({ runId: ledgerRunId, graphId }, "Graph run facts missing or mismatched");
+      return NextResponse.json({ error: "Graph run facts missing or mismatched" }, { status: 409 });
+    }
+
     if (idempotencyResult.status === "cached") {
       // Already processed - return cached result with original outcome
       const cached = idempotencyResult.request;
@@ -633,7 +651,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     try {
     // Create graph executor and run
     const executor = createGraphExecutor(executeStream, toUserId(actorUserId));
-    const ledgerRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, runId);
     const scopedExecutor = createScopedGraphExecutor({
       executor,
       abortSignal: executionController.signal,
@@ -656,7 +673,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       },
       resolver: container.providerResolver,
       actorId: actorUserId,
-      runKind: ledgerRun?.runKind ?? undefined,
+      runKind: ledgerRun.runKind,
       ...(container.connectionBroker
         ? { broker: container.connectionBroker }
         : {}),
@@ -678,7 +695,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     const responseFormat = resolveResponseFormat(input);
 
 
-    const unattended = ledgerRun?.runKind === "system_scheduled" &&
+    const unattended = ledgerRun.runKind === "system_scheduled" &&
       ledgerRun.triggerSource === "temporal_schedule" &&
       ledgerRun.graphId === graphId && ledgerRun.triggerRef !== null &&
       ledgerRun.scheduledFor !== null &&
