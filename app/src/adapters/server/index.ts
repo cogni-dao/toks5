@@ -32,6 +32,7 @@ export { AggregatingAgentCatalog } from "./ai/aggregating-agent-catalog";
 export type { ExecutionScope } from "./ai/execution-scope";
 // Execution scope (ALS) — per-run billing + actor context for tools
 export {
+  findExecutionScope,
   getExecutionScope,
   runInScope,
   scopeUserId,

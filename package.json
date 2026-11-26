@@ -57,8 +57,8 @@
     "yaml": "^2.8.3"
   },
   "dependencies": {
-    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.24.0/cogni-dao-knowledge-store-0.24.0.tgz",
-    "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.24.0/cogni-dao-metrics-0.24.0.tgz",
-    "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.24.0/cogni-dao-work-items-0.24.0.tgz"
+    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.25.0/cogni-dao-knowledge-store-0.25.0.tgz",
+    "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/cogni-dao-metrics-0.25.0.tgz",
+    "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.25.0/cogni-dao-work-items-0.25.0.tgz"
   }
 }

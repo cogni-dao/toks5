@@ -32,7 +32,6 @@ import {
   patchWorkItem,
   WorkItemForbiddenError,
   WorkItemNotFoundError,
-  WorkItemsBackendNotReadyError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -106,8 +105,6 @@ export const PATCH = wrapRouteHandlerWithLogging<{
             errorCode: e.errorCode,
             body: { error: e.message, errorCode: e.errorCode, action: e.action },
           };
-        if (e instanceof WorkItemsBackendNotReadyError)
-          return { status: 503, errorCode: "backend_unavailable", body: { error: e.message } };
         return undefined;
       },
     });

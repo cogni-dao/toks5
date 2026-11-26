@@ -37,6 +37,8 @@ export const EVENT_NAMES = {
 	// A refused work item write (task.0122): one terminal event per refusal with its errorCode (invalid_input, gate_unmet, revision_conflict, ...); codes and ids only, never a body.
 	// An item envelope part (links, artifacts, readings) that could not be read in time or failed: the envelope is served without it and marked unavailable. One warn per degraded part.
 	WORK_ITEMS_ENVELOPE_DEGRADED: "work.items.envelope_degraded",
+	// A work-item store answered busy with no terminal event of its own (task.0162): one 503 line with its closed `reason`, never the error text.
+	WORK_ITEMS_BACKEND_UNAVAILABLE: "work.items.backend_unavailable",
 	WORK_ITEMS_CREATE_REFUSED: "work.items.create_refused",
 	WORK_ITEMS_PATCH_REFUSED: "work.items.patch_refused",
 	// The success twins: one terminal event per accepted create or patch (route or agent tool), ids and counts only.
@@ -203,6 +205,12 @@ export const EVENT_NAMES = {
 
 	// Saved conversation reads (metadata only)
 	AI_THREAD_READ: "ai.thread_read",
+	// Agent atom read counters (story.0061): one line per flush with key and read counts; a drop or a failed flush with its count. Never ids.
+	KNOWLEDGE_READ_COUNTS_FLUSHED: "knowledge.read_counts_flushed",
+	KNOWLEDGE_READ_COUNT_WRITE_FAILED: "knowledge.read_count_write_failed",
+	// A citing patch's (atom, item) pairs recorded, or not recorded (story.0061): counts and reason only.
+	KNOWLEDGE_CITE_PAIRS_RECORDED: "knowledge.cite_pairs_recorded",
+	KNOWLEDGE_CITE_PAIRS_WRITE_FAILED: "knowledge.cite_pairs_write_failed",
 
 	// Scheduling Domain
 	SCHEDULE_DETAIL_READ: "schedules.detail_read",

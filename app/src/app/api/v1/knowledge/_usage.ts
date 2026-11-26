@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@app/api/v1/knowledge/_usage`
+ * Purpose: Count one HTTP atom read by an agent (story.0061).
+ * Scope: Applies the bearer-only class rule and hands the read to the container's counter.
+ * Invariants:
+ * - AGENTS_ONLY: a cookie-session human (`via: "session"`) is never counted. An invalid bearer resolves to no
+ *   identity (BEARER_CLAIMS_EXCLUSIVE), so a counted caller is always a verified machine key.
+ * - NEVER_FAILS_THE_ROUTE: a missing or throwing counter is ignored.
+ * Side-effects: none beyond `knowledgeReadCounter.count()`
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-usage-telemetry
+ * @internal
+ */
+
+import type { SessionUser } from "@cogni/node-shared";
+
+import { getContainer } from "@/bootstrap/container";
+
+export function countAgentRead(
+  sessionUser: SessionUser,
+  atomId: string,
+  outcome: "ok" | "fail"
+): void {
+  // `via` is the one owner of how the caller authenticated; an unset `via` is a bearer, as in the route wrapper.
+  if (sessionUser.via === "session") return;
+  try {
+    getContainer().knowledgeReadCounter.count({
+      atomId,
+      outcome,
+      principalId: sessionUser.id,
+      principalClass: "external_agent",
+    });
+  } catch {
+    // NEVER_FAILS_THE_ROUTE
+  }
+}
