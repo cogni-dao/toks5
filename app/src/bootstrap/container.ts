@@ -953,7 +953,6 @@ function createContainer(): Container {
 			knowledgeSql: doltClient,
 			observationsSql: serviceDb.$client,
 			environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
-			metricsQuery,
 			// Compute receipts and skipped invalid definitions must reach Loki.
 			log: (event) => log.info(event, "metric.event"),
 		});
