@@ -911,8 +911,8 @@ function createContainer(): Container {
 			const leased = doltgresWorkItems;
 			doltgresWorkItems = {
 				...leased,
-				async patch(input, principalId) {
-					const item = await leased.patch(input, principalId);
+				async patch(input, attribution) {
+					const item = await leased.patch(input, attribution);
 					if (input.cites?.length) {
 						citePairs.record(item.id, item.revision, input.cites);
 					}

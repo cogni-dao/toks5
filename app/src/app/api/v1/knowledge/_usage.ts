@@ -6,8 +6,8 @@
  * Purpose: Count one HTTP atom read by an agent (story.0061).
  * Scope: Applies the bearer-only class rule and hands the read to the container's counter.
  * Invariants:
- * - AGENTS_ONLY: only a request carrying a bearer token is counted; a cookie-session human never is. An invalid
- *   bearer resolves to no identity (BEARER_CLAIMS_EXCLUSIVE), so a counted caller is always a verified machine key.
+ * - AGENTS_ONLY: a cookie-session human (`via: "session"`) is never counted. An invalid bearer resolves to no
+ *   identity (BEARER_CLAIMS_EXCLUSIVE), so a counted caller is always a verified machine key.
  * - NEVER_FAILS_THE_ROUTE: a missing or throwing counter is ignored.
  * Side-effects: none beyond `knowledgeReadCounter.count()`
  * Links: https://node-template.cognidao.org/knowledge/knowledge-usage-telemetry
@@ -18,20 +18,13 @@ import type { SessionUser } from "@cogni/node-shared";
 
 import { getContainer } from "@/bootstrap/container";
 
-function isBearerRequest(request: Request): boolean {
-  return (
-    request.headers.get("authorization")?.toLowerCase().startsWith("bearer ") ===
-    true
-  );
-}
-
 export function countAgentRead(
-  request: Request,
   sessionUser: SessionUser,
   atomId: string,
   outcome: "ok" | "fail"
 ): void {
-  if (!isBearerRequest(request)) return;
+  // `via` is the one owner of how the caller authenticated; an unset `via` is a bearer, as in the route wrapper.
+  if (sessionUser.via === "session") return;
   try {
     getContainer().knowledgeReadCounter.count({
       atomId,

@@ -32,7 +32,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, request, sessionUser, context) => {
+  async (ctx, _request, sessionUser, context) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
@@ -52,7 +52,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     const { id } = await context.params;
 
     const entry = await port.getKnowledge(id);
-    countAgentRead(request, sessionUser, id, entry ? "ok" : "fail");
+    countAgentRead(sessionUser, id, entry ? "ok" : "fail");
     if (!entry) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
