@@ -189,8 +189,11 @@ import {
 	createApproversNodeAdminAuthority,
 } from "@/bootstrap/node-admin-gate";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
-import { createWorkItemWriters } from "@/bootstrap/capabilities/work-item-writers";
-import { bindEdoToolCapability } from "@/bootstrap/write-attribution";
+import { createRunAttribution, createWorkItemWriters } from "@cogni/work-items";
+import { bindEdoToolCapability } from "@cogni/knowledge-store";
+import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
+import { getCurrentTraceId } from "@/bootstrap/otel";
+
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
 	startGovernanceSyncOnBoot,
@@ -788,6 +791,8 @@ function createContainer(): Container {
 	// ACTING_PRINCIPAL_FOR_WRITES (task.0133): every tool write of the work-item capability is attributed here, and only here: see `work-item-writers.ts`.
 	const workItemWriters = createWorkItemWriters({
 		log,
+		scope: getExecutionScope,
+		traceId: getCurrentTraceId,
 		store: () => doltgresWorkItems,
 		artifacts: () => workItemArtifacts,
 	});
@@ -1099,7 +1104,7 @@ function createContainer(): Container {
 	});
 
 	// ACTING_PRINCIPAL_FOR_WRITES (task.0133): a tool never builds an attribution; the host binds the run's at each call.
-	const edoToolCapability: EdoCapability = bindEdoToolCapability(edoCapability);
+	const edoToolCapability: EdoCapability = bindEdoToolCapability(edoCapability, createRunAttribution({ scope: getExecutionScope, log }));
 
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
 	const toolBindings = createToolBindings({

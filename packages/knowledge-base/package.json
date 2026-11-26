@@ -38,7 +38,7 @@
     "@cogni/knowledge-store": "*"
   },
   "devDependencies": {
-    "@cogni/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.25.0/cogni-dao-knowledge-store-0.25.0.tgz",
+    "@cogni/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.27.0/cogni-dao-knowledge-store-0.27.0.tgz",
     "tsup": "^8.5.1",
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",

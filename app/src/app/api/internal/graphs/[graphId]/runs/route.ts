@@ -633,6 +633,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     try {
     // Create graph executor and run
     const executor = createGraphExecutor(executeStream, toUserId(actorUserId));
+    const ledgerRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, runId);
     const scopedExecutor = createScopedGraphExecutor({
       executor,
       abortSignal: executionController.signal,
@@ -655,6 +656,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       },
       resolver: container.providerResolver,
       actorId: actorUserId,
+      runKind: ledgerRun?.runKind ?? undefined,
       ...(container.connectionBroker
         ? { broker: container.connectionBroker }
         : {}),
@@ -675,9 +677,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // Forward responseFormat if provided (enables structuredOutput in GraphRunResult).
     const responseFormat = resolveResponseFormat(input);
 
-    const ledgerRun = executionGrantId
-      ? await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, runId)
-      : null;
+
     const unattended = ledgerRun?.runKind === "system_scheduled" &&
       ledgerRun.triggerSource === "temporal_schedule" &&
       ledgerRun.graphId === graphId && ledgerRun.triggerRef !== null &&
