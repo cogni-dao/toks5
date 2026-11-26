@@ -244,91 +244,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         requestHash
       );
 
-    // The durable ledger is the authority for execution attribution, including on
-    // cached retries. Never execute or mutate a run whose facts are absent or
-    // disagree with this invocation.
-    const ledgerRunId = idempotencyResult.status === "cached" || idempotencyResult.status === "stale"
-      ? idempotencyResult.request.runId
-      : runId;
-    const ledgerRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, ledgerRunId);
-    const scheduled = ledgerRun?.runKind === "system_scheduled";
-    const validKind = ledgerRun?.runKind === "user_immediate" || scheduled || ledgerRun?.runKind === "system_webhook";
-    const validSchedule = !scheduled || (Boolean(executionGrantId) &&
-      ledgerRun.triggerSource === "temporal_schedule" && ledgerRun.triggerRef !== null &&
-      ledgerRun.scheduledFor instanceof Date && !Number.isNaN(ledgerRun.scheduledFor.getTime()) &&
-      idempotencyKey === `${ledgerRun.triggerRef}:${ledgerRun.scheduledFor.toISOString()}`);
-    if (!ledgerRun || !ledgerRun.runKind || ledgerRun.runId !== ledgerRunId || ledgerRun.graphId !== graphId || !validKind || !validSchedule || (executionGrantId && !scheduled)) {
-      log.warn({ runId: ledgerRunId, graphId }, "Graph run facts missing or mismatched");
-      return NextResponse.json({ error: "Graph run facts missing or mismatched" }, { status: 409 });
-    }
-
-    if (idempotencyResult.status === "cached") {
-      // Already processed - return cached result with original outcome
-      const cached = idempotencyResult.request;
-      // The node execution path is the outcome truth-holder. Reconcile the run
-      // ledger before returning so a lost worker response cannot leave a
-      // successfully finalized execution_request paired with graph_runs=running.
-      await container.graphRunRepository.markRunCompleted(
-        SYSTEM_ACTOR,
-        cached.runId,
-        cached.ok ? "success" : "error",
-        cached.ok ? undefined : "Graph execution failed",
-        cached.ok ? undefined : (cached.errorCode ?? "internal")
-      );
-      log.info(
-        { idempotencyKey, runId: cached.runId, ok: cached.ok },
-        "Returning cached result"
-      );
-      // Use explicit branching for discriminated union type narrowing
-      if (cached.ok) {
-        const cachedResponse: InternalGraphRunOutput = {
-          ok: true,
-          runId: cached.runId,
-          traceId: cached.traceId,
-        };
-        return NextResponse.json(cachedResponse, { status: 200 });
-      } else {
-        const cachedResponse: InternalGraphRunOutput = {
-          ok: false,
-          runId: cached.runId,
-          traceId: cached.traceId,
-          error: cached.errorCode ?? "internal",
-        };
-        return NextResponse.json(cachedResponse, { status: 200 });
-      }
-    }
-
-    let requestAlreadyClaimed = false;
-    if (idempotencyResult.status === "pending") {
-      // Execution in progress - return 409 Conflict to signal retry later
-      const pending = idempotencyResult.request;
-      if (suppliedRequestHash && pending.runId === runId && pending.leaseExpiresAt === null) {
-        // The completion facade durably claimed this exact request before
-        // starting Temporal. This workflow owns the pending record.
-        requestAlreadyClaimed = true;
-      } else {
-        log.info(
-          { idempotencyKey, runId: pending.runId },
-          "Execution already in progress"
-        );
-        return NextResponse.json(
-          {
-            error: "Execution in progress",
-            message:
-              "Request with this Idempotency-Key is currently being processed",
-            runId: pending.runId,
-          },
-          { status: 409 }
-        );
-      }
-    }
-
-    // A stale lease is eligible for atomic re-claim after validation below.
-    // Preserve the first claimant's canonical run identity.
-    if (idempotencyResult.status === "stale") {
-      runId = idempotencyResult.request.runId;
-    }
-
     if (idempotencyResult.status === "mismatch") {
       // Same idempotency key but different payload - reject
       log.warn(
@@ -347,6 +262,16 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         },
         { status: 422 }
       );
+    }
+
+    // Every persisted idempotency outcome names the canonical run, including
+    // a pending workflow claim. Explicit caller identities must agree with it.
+    if (idempotencyResult.status !== "new") {
+      const canonicalRunId = idempotencyResult.request.runId;
+      if (providedRunId && providedRunId !== canonicalRunId) {
+        return NextResponse.json({ error: "Graph run identity mismatch" }, { status: 409 });
+      }
+      runId = canonicalRunId;
     }
 
     // --- 7/8. Resolve execution identity ---
@@ -455,6 +380,108 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
             .digest("hex")
             .slice(0, 32)}`
         : `run:${runId}`;
+    }
+
+    // Only a fresh API invocation without an externally named run can create
+    // its own row. This host knows its API provenance; grants alone do not tell
+    // us whether a run is scheduled or webhook, so never invent that kind.
+    if (!providedRunId && !executionGrantId && idempotencyResult.status === "new") {
+      await container.graphRunRepository.createRun(SYSTEM_ACTOR, {
+        runId,
+        graphId,
+        runKind: "user_immediate",
+        triggerSource: "api",
+        triggerRef: idempotencyKey,
+        requestedBy: actorUserId,
+        ...(stateKey ? { stateKey } : {}),
+      });
+    }
+
+    type DurableRun = NonNullable<Awaited<ReturnType<typeof container.graphRunRepository.getRunByRunId>>>;
+    const isBoundRun = (run: DurableRun | null, expectedRunId: string): run is DurableRun & { runKind: NonNullable<DurableRun["runKind"]> } => {
+      if (!run || run.runId !== expectedRunId || run.graphId !== graphId || run.requestedBy !== actorUserId) return false;
+      if (executionGrantId && typeof input.actorUserId === "string" && input.actorUserId !== actorUserId) return false;
+      switch (run.runKind) {
+        case "system_scheduled":
+          return Boolean(executionGrantId) && run.triggerSource === "temporal_schedule" &&
+            run.triggerRef !== null && run.scheduledFor instanceof Date &&
+            !Number.isNaN(run.scheduledFor.getTime()) &&
+            idempotencyKey === `${run.triggerRef}:${run.scheduledFor.toISOString()}`;
+        case "system_webhook":
+          return run.triggerSource === "webhook" || Boolean(run.triggerSource?.startsWith("webhook:"));
+        case "user_immediate":
+          return !executionGrantId && run.triggerSource === "api";
+        default:
+          return false;
+      }
+    };
+    const durableRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, runId);
+    if (!isBoundRun(durableRun, runId)) {
+      log.warn({ runId, graphId }, "Graph run facts missing or mismatched");
+      return NextResponse.json({ error: "Graph run facts missing or mismatched" }, { status: 409 });
+    }
+
+    let ledgerRun = durableRun;
+
+    if (idempotencyResult.status === "cached") {
+      // Already processed - return cached result with original outcome
+      const cached = idempotencyResult.request;
+      // The node execution path is the outcome truth-holder. Reconcile the run
+      // ledger before returning so a lost worker response cannot leave a
+      // successfully finalized execution_request paired with graph_runs=running.
+      await container.graphRunRepository.markRunCompleted(
+        SYSTEM_ACTOR,
+        cached.runId,
+        cached.ok ? "success" : "error",
+        cached.ok ? undefined : "Graph execution failed",
+        cached.ok ? undefined : (cached.errorCode ?? "internal")
+      );
+      log.info(
+        { idempotencyKey, runId: cached.runId, ok: cached.ok },
+        "Returning cached result"
+      );
+      // Use explicit branching for discriminated union type narrowing
+      if (cached.ok) {
+        const cachedResponse: InternalGraphRunOutput = {
+          ok: true,
+          runId: cached.runId,
+          traceId: cached.traceId,
+        };
+        return NextResponse.json(cachedResponse, { status: 200 });
+      } else {
+        const cachedResponse: InternalGraphRunOutput = {
+          ok: false,
+          runId: cached.runId,
+          traceId: cached.traceId,
+          error: cached.errorCode ?? "internal",
+        };
+        return NextResponse.json(cachedResponse, { status: 200 });
+      }
+    }
+
+    let requestAlreadyClaimed = false;
+    if (idempotencyResult.status === "pending") {
+      // Execution in progress - return 409 Conflict to signal retry later
+      const pending = idempotencyResult.request;
+      if (suppliedRequestHash && pending.runId === runId && pending.leaseExpiresAt === null) {
+        // The completion facade durably claimed this exact request before
+        // starting Temporal. This workflow owns the pending record.
+        requestAlreadyClaimed = true;
+      } else {
+        log.info(
+          { idempotencyKey, runId: pending.runId },
+          "Execution already in progress"
+        );
+        return NextResponse.json(
+          {
+            error: "Execution in progress",
+            message:
+              "Request with this Idempotency-Key is currently being processed",
+            runId: pending.runId,
+          },
+          { status: 409 }
+        );
+      }
     }
 
     // --- 9. Execute graph ---
@@ -575,6 +602,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       if (claimResult.status !== "claimed") {
         if (claimResult.status === "cached") {
           const cached = claimResult.request;
+          const cachedRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, cached.runId);
+          if ((providedRunId && providedRunId !== cached.runId) || !isBoundRun(cachedRun, cached.runId)) {
+            return NextResponse.json({ error: "Graph run identity mismatch" }, { status: 409 });
+          }
           await container.graphRunRepository.markRunCompleted(
             SYSTEM_ACTOR,
             cached.runId,
@@ -611,7 +642,15 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           { status: 409 }
         );
       }
-      runId = claimResult.request.runId;
+      const claimedRunId = claimResult.request.runId;
+      if (claimedRunId !== runId) {
+        const claimedRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, claimedRunId);
+        if ((providedRunId && providedRunId !== claimedRunId) || !isBoundRun(claimedRun, claimedRunId)) {
+          return NextResponse.json({ error: "Graph run identity mismatch" }, { status: 409 });
+        }
+        ledgerRun = claimedRun;
+      }
+      runId = claimedRunId;
     }
     if (!stateKey) sessionId = `run:${runId}`;
 

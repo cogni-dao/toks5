@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   finalizeRequest: vi.fn(),
   markRunCompleted: vi.fn().mockResolvedValue(undefined),
   getRunByRunId: vi.fn().mockResolvedValue(null),
+  createRun: vi.fn(),
+  validateGrant: vi.fn(),
   publish: vi.fn(async (_runId: string, event: { type: string }) => {
     if (event.type === "done") throw new Error("redis unavailable");
   }),
@@ -56,7 +58,7 @@ vi.mock("@/bootstrap/http", () => ({
           },
         } as never,
         request as never,
-        null as never,
+        { id: USER_ID } as never,
         context as never
       ),
 }));
@@ -102,9 +104,10 @@ vi.mock("@/bootstrap/container", () => ({
       markRunCompleted: mocks.markRunCompleted,
       patchRunStateKey: mocks.patchRunStateKey,
       getRunByRunId: mocks.getRunByRunId,
+      createRun: mocks.createRun,
     },
     accountsForUser: () => ({}),
-    executionGrantWorkerPort: { validateGrantForGraph: vi.fn().mockResolvedValue({ userId: USER_ID, billingAccountId: BILLING_ID }) },
+    executionGrantWorkerPort: { validateGrantForGraph: mocks.validateGrant },
     serviceAccountService: { getBillingAccountById: vi.fn().mockResolvedValue({ defaultVirtualKeyId: VIRTUAL_KEY_ID }) },
     providerResolver: {},
     connectionBroker: undefined,
@@ -123,7 +126,30 @@ vi.mock("@/bootstrap/container", () => ({
   }),
 }));
 
+vi.mock("@/app/_facades/work/items.server", () => ({
+  getWorkItem: vi.fn(), patchWorkItem: vi.fn(),
+}));
+vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
+
 import { POST } from "@/app/api/internal/graphs/[graphId]/runs/route";
+import { POST as createRun } from "@/app/api/internal/graph-runs/route";
+import { DELETE as deleteItem } from "@/app/api/v1/work/items/[id]/route";
+
+const GRANT_ID = "40000000-0000-4000-a000-000000000001";
+const OTHER_RUN_ID = "a0000000-0000-4000-a000-000000000002";
+const BASE_RUN = { runId: RUN_ID, graphId: "langgraph:default", runKind: "user_immediate", triggerSource: "api", triggerRef: "api:test", requestedBy: USER_ID, scheduleId: null, scheduledFor: null, stateKey: null };
+const BASE_INPUT = { messages: [{ role: "user", content: "hello" }], modelRef: { providerKey: "platform", modelId: "test-model" }, actorUserId: USER_ID, billingAccountId: BILLING_ID, virtualKeyId: VIRTUAL_KEY_ID };
+function invoke(body: unknown = { runId: RUN_ID, input: BASE_INPUT }) {
+  return POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:default/runs", {
+    method: "POST", headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": "api:test" }, body: JSON.stringify(body),
+  }), { params: Promise.resolve({ graphId: "langgraph:default" }) });
+}
+function create(body: unknown) {
+  return createRun(new NextRequest("http://localhost/api/internal/graph-runs", {
+    method: "POST", headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json" }, body: JSON.stringify(body),
+  }));
+}
+
 
 describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => {
   beforeEach(() => {
@@ -131,13 +157,16 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     mocks.scopedSignal = undefined;
     mocks.scopedRunKind = undefined;
     mocks.checkIdempotency.mockResolvedValue({ status: "new" });
-    mocks.getRunByRunId.mockImplementation(async () => ({ runId: RUN_ID, runKind: "user_immediate", graphId: "langgraph:default" }));
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN });
+    mocks.createRun.mockReset().mockImplementation(async (_actor, facts) => ({ ...BASE_RUN, ...facts }));
+    mocks.validateGrant.mockReset().mockResolvedValue({ userId: USER_ID, billingAccountId: BILLING_ID });
+    mocks.createPendingRequest.mockResolvedValue({ status: "claimed", request: { runId: RUN_ID } });
   });
 
   it.each(["cogni", "work-prioritizer"])("marks only a validated schedule of %s unattended", async (graph) => {
     for (const scheduled of [false, true]) {
       mocks.runGraph.mockClear();
-      mocks.getRunByRunId.mockResolvedValue(scheduled ? { runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: `langgraph:${graph}`, triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") } : { runId: RUN_ID, runKind: "user_immediate", graphId: `langgraph:${graph}` });
+      mocks.getRunByRunId.mockResolvedValue(scheduled ? { ...BASE_RUN, runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: `langgraph:${graph}`, triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") } : { ...BASE_RUN, runKind: "user_immediate", graphId: `langgraph:${graph}` });
       await POST(new NextRequest(`http://localhost/api/internal/graphs/langgraph:${graph}/runs`, {
         method: "POST",
         headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": scheduled ? "schedule:2026-01-01T00:00:00.000Z" : "api:test" },
@@ -151,11 +180,11 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
   });
 
   it.each([
-    { runId: RUN_ID, runKind: "system_webhook", triggerSource: "webhook", graphId: "langgraph:work-prioritizer", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
-    { runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:other", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
+    { ...BASE_RUN, runId: RUN_ID, runKind: "system_webhook", triggerSource: "temporal_schedule", graphId: "langgraph:work-prioritizer", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
+    { ...BASE_RUN, runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:other", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
     null,
-    { runId: RUN_ID, runKind: null, graphId: "langgraph:work-prioritizer" },
-    { runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:work-prioritizer", triggerRef: "wrong", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
+    { ...BASE_RUN, runId: RUN_ID, runKind: null, graphId: "langgraph:work-prioritizer" },
+    { ...BASE_RUN, runId: RUN_ID, runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:work-prioritizer", triggerRef: "wrong", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
   ])("refuses unverified run facts before mutation or execution", async (record) => {
     mocks.getRunByRunId.mockResolvedValue(record);
     const response = await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:work-prioritizer/runs", {
@@ -167,6 +196,117 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     expect(mocks.markRunCompleted).not.toHaveBeenCalled();
     expect(mocks.patchRunStateKey).not.toHaveBeenCalled();
     expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("executes a grant-backed webhook with its durable requester and never marks it unattended", async () => {
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, runKind: "system_webhook", triggerSource: "webhook:github", triggerRef: "delivery-1" });
+    expect((await invoke({ executionGrantId: GRANT_ID, runId: RUN_ID, input: BASE_INPUT })).status).toBe(200);
+    expect(mocks.validateGrant).toHaveBeenCalledWith(expect.anything(), GRANT_ID, "langgraph:default");
+    expect(mocks.scopedRunKind).toBe("system_webhook");
+    expect(mocks.runGraph).toHaveBeenCalledWith(expect.objectContaining({ runId: RUN_ID }), expect.not.objectContaining({ unattended: expect.anything() }));
+  });
+
+  it("creates and reads canonical API facts before executing when runId is omitted", async () => {
+    let durable: typeof BASE_RUN | null = null;
+    mocks.getRunByRunId.mockImplementation(async () => durable);
+    mocks.createRun.mockImplementation(async (_actor, facts) => {
+      durable = { ...BASE_RUN, ...facts };
+      return durable;
+    });
+    mocks.createPendingRequest.mockImplementationOnce(async (_key, _hash, runId) => ({ status: "claimed", request: { runId } }));
+    const response = await invoke({ input: BASE_INPUT });
+    expect(response.status).toBe(200);
+    const facts = mocks.createRun.mock.calls[0]?.[1];
+    expect(facts).toMatchObject({ graphId: "langgraph:default", runKind: "user_immediate", triggerSource: "api", triggerRef: "api:test", requestedBy: USER_ID });
+    expect(facts.runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(mocks.runGraph).toHaveBeenCalledWith(expect.objectContaining({ runId: facts.runId }), expect.anything());
+    expect(mocks.createRun.mock.invocationCallOrder[0]).toBeLessThan(mocks.runGraph.mock.invocationCallOrder[0] as number);
+  });
+
+  it("keeps omitted-run retries bound to their existing durable row", async () => {
+    mocks.checkIdempotency.mockResolvedValue({ status: "cached", request: { runId: RUN_ID, ok: true, traceId: null } });
+    const response = await invoke({ input: BASE_INPUT });
+    expect(await response.json()).toMatchObject({ ok: true, runId: RUN_ID });
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("returns definitive 422 conflicts before ledger reads or grant validation", async () => {
+    mocks.checkIdempotency.mockResolvedValue({ status: "mismatch", existingHash: "old", providedHash: "new" });
+    mocks.getRunByRunId.mockResolvedValue(null);
+    expect((await invoke({ executionGrantId: GRANT_ID, runId: OTHER_RUN_ID, input: BASE_INPUT })).status).toBe(422);
+    expect(mocks.getRunByRunId).not.toHaveBeenCalled();
+    expect(mocks.validateGrant).not.toHaveBeenCalled();
+    expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+  });
+
+  it.each(["new", "cached", "stale", "pending"])("refuses a different durable requester on %s", async (status) => {
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, requestedBy: "someone-else" });
+    mocks.checkIdempotency.mockResolvedValue({ status, request: { runId: RUN_ID, ok: true } });
+    expect((await invoke()).status).toBe(409);
+    expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+    expect(mocks.patchRunStateKey).not.toHaveBeenCalled();
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("binds a webhook requester to the validated grant owner, regardless of payload claims", async () => {
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, runKind: "system_webhook", triggerSource: "webhook:github" });
+    mocks.validateGrant.mockResolvedValue({ userId: "another-owner", billingAccountId: BILLING_ID });
+    expect((await invoke({ executionGrantId: GRANT_ID, runId: RUN_ID, input: BASE_INPUT })).status).toBe(409);
+    expect(mocks.validateGrant).toHaveBeenCalledOnce();
+    expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it.each(["cached", "pending", "stale"])("refuses explicitly conflicting runId on %s", async (status) => {
+    mocks.checkIdempotency.mockResolvedValue({ status, request: { runId: OTHER_RUN_ID, ok: true } });
+    expect((await invoke()).status).toBe(409);
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("checks the winning cached run after an atomic claim race", async () => {
+    mocks.createPendingRequest.mockResolvedValue({ status: "cached", request: { runId: OTHER_RUN_ID, ok: true } });
+    expect((await invoke()).status).toBe(409);
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("does not manufacture a run kind from a grant when no runId is given", async () => {
+    mocks.getRunByRunId.mockResolvedValue(null);
+    expect((await invoke({ executionGrantId: GRANT_ID, input: BASE_INPUT })).status).toBe(409);
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it.each(["runId", "graphId", "runKind", "requestedBy", "triggerSource", "triggerRef", "scheduleId", "scheduledFor"])("refuses idempotent create with conflicting %s", async (field) => {
+    const different = field === "scheduledFor" ? new Date("2026-01-01") : field === "runId" ? OTHER_RUN_ID : "other";
+    mocks.createRun.mockRejectedValue(new Error("duplicate run"));
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, [field]: different });
+    expect((await create({ runId: RUN_ID, graphId: BASE_RUN.graphId, runKind: BASE_RUN.runKind, triggerSource: BASE_RUN.triggerSource, triggerRef: BASE_RUN.triggerRef, requestedBy: USER_ID })).status).toBe(409);
+  });
+
+  it("accepts an exact idempotent create even after stateKey has been patched", async () => {
+    mocks.createRun.mockRejectedValue(new Error("duplicate run"));
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, stateKey: "host-derived-thread" });
+    expect((await create({ runId: RUN_ID, graphId: BASE_RUN.graphId, runKind: BASE_RUN.runKind, triggerSource: BASE_RUN.triggerSource, triggerRef: BASE_RUN.triggerRef, requestedBy: USER_ID })).status).toBe(200);
+  });
+
+  it("refuses a different canonical identity returned by scheduled-slot creation", async () => {
+    mocks.createRun.mockResolvedValue({ ...BASE_RUN, runId: OTHER_RUN_ID });
+    expect((await create({ runId: RUN_ID })).status).toBe(409);
+  });
+
+  it("returns cancellation advice without invoking item writers for retired DELETE", async () => {
+    const { getWorkItem, patchWorkItem } = await import("@/app/_facades/work/items.server");
+    const response = await deleteItem(new NextRequest("http://localhost/api/v1/work/items/task.1", { method: "DELETE" }), { params: Promise.resolve({ id: "task.1" }) });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ error: "work_item_deletion_retired", message: expect.stringContaining("status=cancelled") });
+    expect(getWorkItem).not.toHaveBeenCalled();
+    expect(patchWorkItem).not.toHaveBeenCalled();
   });
 
   it("aborts cooperative execution at the host deadline", async () => {
