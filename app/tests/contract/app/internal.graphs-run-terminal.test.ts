@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   }),
   heartbeatRequest: vi.fn().mockResolvedValue(undefined),
   finalizeRequest: vi.fn(),
+  markRunStarted: vi.fn().mockResolvedValue(undefined),
   markRunCompleted: vi.fn().mockResolvedValue(undefined),
   getRunByRunId: vi.fn().mockResolvedValue(null),
   createRun: vi.fn(),
@@ -106,6 +107,7 @@ vi.mock("@/bootstrap/container", () => ({
       finalizeRequest: mocks.finalizeRequest,
     },
     graphRunRepository: {
+      markRunStarted: mocks.markRunStarted,
       markRunCompleted: mocks.markRunCompleted,
       patchRunStateKey: mocks.patchRunStateKey,
       getRunByRunId: mocks.getRunByRunId,
@@ -227,6 +229,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
       expect(mocks.markRunCompleted).toHaveBeenCalledWith(expect.anything(), RUN_ID, record.ok ? "success" : "error", record.ok ? undefined : "Graph execution failed", record.ok ? undefined : "timeout");
     }
     if (cached || expected !== 200) {
+      expect(mocks.markRunStarted).not.toHaveBeenCalled();
       expect(mocks.runGraph).not.toHaveBeenCalled();
       expect(mocks.createPendingRequest).not.toHaveBeenCalled();
       expect(mocks.heartbeatRequest).not.toHaveBeenCalled();
@@ -234,6 +237,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
       expect(mocks.patchRunStateKey).not.toHaveBeenCalled();
       if (!cached) expect(mocks.markRunCompleted).not.toHaveBeenCalled();
     } else {
+      expect(mocks.markRunStarted).toHaveBeenCalledWith(expect.anything(), RUN_ID, expect.any(String));
       expect(mocks.runGraph).toHaveBeenCalledOnce();
       expect(mocks.scopedRunKind).toBe(test.kind);
       expect(mocks.createPendingRequest).toHaveBeenCalledWith(key, hash, RUN_ID, expect.any(String), expect.any(String));
@@ -418,7 +422,8 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     expect(facts.runId).toMatch(/^[0-9a-f-]{36}$/);
     expect(mocks.runGraph).toHaveBeenCalledWith(expect.objectContaining({ runId: facts.runId }), expect.anything());
     expect(mocks.createPendingRequest.mock.invocationCallOrder[0]).toBeLessThan(mocks.createRun.mock.invocationCallOrder[0] as number);
-    expect(mocks.createRun.mock.invocationCallOrder[0]).toBeLessThan(mocks.runGraph.mock.invocationCallOrder[0] as number);
+    expect(mocks.createRun.mock.invocationCallOrder[0]).toBeLessThan(mocks.markRunStarted.mock.invocationCallOrder[0] as number);
+    expect(mocks.markRunStarted.mock.invocationCallOrder[0]).toBeLessThan(mocks.runGraph.mock.invocationCallOrder[0] as number);
   });
 
   it.each([undefined, {}, { providerKey: "platform" }])("validates optional-run model before any insertion: %s", async (modelRef) => {
@@ -426,6 +431,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     expect(response.status).toBe(400);
     expect(mocks.createRun).not.toHaveBeenCalled();
     expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+    expect(mocks.markRunStarted).not.toHaveBeenCalled();
     expect(mocks.runGraph).not.toHaveBeenCalled();
   });
 
@@ -458,6 +464,15 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     expect(await response.json()).toMatchObject({ ok: false, error: "internal" });
     expect(mocks.finalizeRequest).toHaveBeenCalledWith("api:test", { ok: false, errorCode: "internal" });
     expect(mocks.markRunCompleted).toHaveBeenCalledWith(expect.anything(), expect.any(String), "error", "Graph execution failed", "internal");
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a start transition failure without executing", async () => {
+    mocks.markRunStarted.mockRejectedValueOnce(new Error("start failed"));
+    const response = await invoke();
+    expect(await response.json()).toMatchObject({ ok: false, error: "internal" });
+    expect(mocks.finalizeRequest).toHaveBeenCalledWith("api:test", { ok: false, errorCode: "internal" });
+    expect(mocks.markRunCompleted).toHaveBeenCalledWith(expect.anything(), RUN_ID, "error", "Graph execution failed", "internal");
     expect(mocks.runGraph).not.toHaveBeenCalled();
   });
 

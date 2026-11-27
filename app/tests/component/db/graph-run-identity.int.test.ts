@@ -30,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const owner = randomUUID();
 const other = randomUUID();
+const historyOwner = randomUUID();
 const scheduleId = randomUUID();
 const runIds: string[] = [];
 const keys: string[] = [];
@@ -53,7 +54,7 @@ describe("canonical graph run creation (real PostgreSQL)", () => {
   beforeAll(async () => {
     await db()
       .insert(users)
-      .values([{ id: owner }, { id: other }]);
+      .values([{ id: owner }, { id: other }, { id: historyOwner }]);
     const billingId = randomUUID();
     const grantId = randomUUID();
     await db()
@@ -89,7 +90,7 @@ describe("canonical graph run creation (real PostgreSQL)", () => {
       await db().delete(graphRuns).where(inArray(graphRuns.runId, runIds));
     await db()
       .delete(users)
-      .where(inArray(users.id, [owner, other]));
+      .where(inArray(users.id, [owner, other, historyOwner]));
   });
 
   it("returns the original API/webhook identity on sequential conflicts without resetting its state", async () => {
@@ -227,5 +228,29 @@ describe("canonical graph run creation (real PostgreSQL)", () => {
       .from(graphRuns)
       .where(inArray(graphRuns.runId, contenders));
     expect(rows.map((row) => row.runId)).toEqual([runId]);
+  });
+
+  it("persists the admitted start and paginates completed optional runs", async () => {
+    const older = nextRun();
+    const current = nextRun();
+    await runs().createRun(SYSTEM_ACTOR, { ...facts(older), requestedBy: historyOwner });
+    await runs().markRunStarted(SYSTEM_ACTOR, older);
+    await runs().markRunCompleted(SYSTEM_ACTOR, older, "success");
+    // The cursor is timestamp-based, so the two real starts must differ.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await runs().createRun(SYSTEM_ACTOR, { ...facts(current), requestedBy: historyOwner });
+    expect(await runs().getRunByRunId(SYSTEM_ACTOR, current)).toMatchObject({ status: "pending", startedAt: null });
+    await runs().markRunStarted(SYSTEM_ACTOR, current, "trace");
+    const running = await runs().getRunByRunId(SYSTEM_ACTOR, current);
+    expect(running).toMatchObject({ status: "running", startedAt: expect.any(Date), langfuseTraceId: "trace" });
+    await runs().markRunCompleted(SYSTEM_ACTOR, current, "success");
+    await runs().markRunStarted(SYSTEM_ACTOR, current, "retry");
+    expect(await runs().getRunByRunId(SYSTEM_ACTOR, current)).toMatchObject({ status: "success", startedAt: running?.startedAt, langfuseTraceId: "trace", completedAt: expect.any(Date) });
+    const page = await runs().listRunsByUser(SYSTEM_ACTOR, historyOwner, { limit: 1 });
+    expect(page[0]?.runId).toBe(current);
+    expect(page[0]?.startedAt).toBeInstanceOf(Date);
+    const next = await runs().listRunsByUser(SYSTEM_ACTOR, historyOwner, { limit: 1, cursor: page[0]?.startedAt?.toISOString() });
+    expect(next.map((run) => run.runId)).toContain(older);
   });
 });

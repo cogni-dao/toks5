@@ -658,6 +658,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         return NextResponse.json({ error: "Graph run identity mismatch" }, { status: 409 });
       }
       ledgerRun = admittedRun;
+      await container.graphRunRepository.markRunStarted(SYSTEM_ACTOR, runId, traceId);
 
     log.info(
       { graphId, runId, executionGrantId, idempotencyKey, traceId },
