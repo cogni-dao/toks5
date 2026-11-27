@@ -3,13 +3,15 @@
 
 /**
  * Module: `@tests/contract/app/internal.graphs-run-terminal`
- * Purpose: Prove failed terminal publication finalizes the accepted execution as failed.
+ * Purpose: Prove graph-run admission, durable replay, and terminal publication lifecycle.
  * Scope: Internal graph-run route with mocked executor, persistence, stream, and idempotency ports.
  * Invariants: rejected done publication cannot produce a successful execution record.
  * Side-effects: none
  * @internal
  */
 
+import { createHash } from "node:crypto";
+import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   getRunByRunId: vi.fn().mockResolvedValue(null),
   createRun: vi.fn(),
   validateGrant: vi.fn(),
+  billingAccount: vi.fn(),
   publish: vi.fn(async (_runId: string, event: { type: string }) => {
     if (event.type === "done") throw new Error("redis unavailable");
   }),
@@ -108,7 +111,7 @@ vi.mock("@/bootstrap/container", () => ({
     },
     accountsForUser: () => ({}),
     executionGrantWorkerPort: { validateGrantForGraph: mocks.validateGrant },
-    serviceAccountService: { getBillingAccountById: vi.fn().mockResolvedValue({ defaultVirtualKeyId: VIRTUAL_KEY_ID }) },
+    serviceAccountService: { getBillingAccountById: mocks.billingAccount },
     providerResolver: {},
     connectionBroker: undefined,
     runStream: {
@@ -156,12 +159,144 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     vi.clearAllMocks();
     mocks.scopedSignal = undefined;
     mocks.scopedRunKind = undefined;
-    mocks.checkIdempotency.mockResolvedValue({ status: "new" });
+    mocks.checkIdempotency.mockReset().mockResolvedValue({ status: "new" });
+    mocks.billingAccount.mockReset().mockResolvedValue({ defaultVirtualKeyId: VIRTUAL_KEY_ID });
     mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN });
     mocks.createRun.mockReset().mockImplementation(async (_actor, facts) => ({ ...BASE_RUN, ...facts }));
     mocks.validateGrant.mockReset().mockResolvedValue({ userId: USER_ID, billingAccountId: BILLING_ID });
     mocks.createPendingRequest.mockResolvedValue({ status: "claimed", request: { runId: RUN_ID } });
   });
+
+  const profiles = [
+    { name: "API subject", kind: "user_immediate", source: "api", grant: false, user: USER_ID, payloadUser: true },
+    { name: "API system", kind: "user_immediate", source: "api", grant: false, user: COGNI_SYSTEM_PRINCIPAL_USER_ID, payloadUser: true },
+    { name: "scheduled owner", kind: "system_scheduled", source: "temporal_schedule", grant: true, user: USER_ID, payloadUser: false },
+    { name: "scheduled system", kind: "system_scheduled", source: "temporal_schedule", grant: true, user: COGNI_SYSTEM_PRINCIPAL_USER_ID, payloadUser: false },
+    { name: "webhook subject", kind: "system_webhook", source: "webhook", grant: false, user: USER_ID, payloadUser: true },
+    { name: "subjectless webhook", kind: "system_webhook", source: "webhook:github", grant: false, user: COGNI_SYSTEM_PRINCIPAL_USER_ID, payloadUser: true },
+    { name: "granted webhook", kind: "system_webhook", source: "webhook:github", grant: true, user: USER_ID, payloadUser: true },
+    { name: "granted subjectless webhook", kind: "system_webhook", source: "webhook:github", grant: true, user: COGNI_SYSTEM_PRINCIPAL_USER_ID, payloadUser: false },
+  ];
+  const lifecycleCases = profiles.flatMap((profile) =>
+    ["new", "mismatch", "pending", "stale", "success", "error"].flatMap((state) =>
+      (profile.grant ? ["live", "expired", "revoked"] : ["none"]).map((grantState) => ({
+        ...profile, state, grantState, label: `${profile.name} / ${state} / ${grantState}`,
+      }))));
+
+  it.each(lifecycleCases)("lifecycle matrix: $label", async (test) => {
+    const scheduledFor = new Date("2026-01-01T00:00:00.000Z");
+    const key = test.kind === "system_scheduled" ? `schedule:${scheduledFor.toISOString()}` : "api:test";
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, runKind: test.kind, triggerSource: test.source,
+      triggerRef: test.kind === "system_scheduled" ? "schedule" : "delivery-1",
+      scheduledFor: test.kind === "system_scheduled" ? scheduledFor : null,
+      requestedBy: test.user === COGNI_SYSTEM_PRINCIPAL_USER_ID ? null : test.user });
+    mocks.validateGrant.mockResolvedValue({ userId: test.user, billingAccountId: BILLING_ID });
+    if (test.grantState === "expired" || test.grantState === "revoked") {
+      const error = new Error(`Grant ${test.grantState}`);
+      error.name = test.grantState === "expired" ? "GrantExpiredError" : "GrantRevokedError";
+      mocks.validateGrant.mockRejectedValue(error);
+    }
+    const { actorUserId: _user, ...context } = BASE_INPUT;
+    const body = { runId: RUN_ID, executionGrantId: test.grant ? GRANT_ID : null,
+      input: { ...context, ...(test.payloadUser ? { actorUserId: test.user } : {}) } };
+    const rawBody = JSON.stringify(body);
+    const hash = createHash("sha256").update("langgraph:default\n").update(rawBody).digest("hex");
+    const cached = test.state === "success" || test.state === "error";
+    const record = { idempotencyKey: key, requestHash: hash, runId: RUN_ID, traceId: "original-trace",
+      ok: cached ? test.state === "success" : null, errorCode: test.state === "error" ? "timeout" : null,
+      leaseExpiresAt: test.state === "stale" ? "2020-01-01T00:00:00.000Z" : "2099-01-01T00:00:00.000Z" };
+    mocks.checkIdempotency.mockImplementation(async (_key, requestHash) => {
+      expect(requestHash).toBe(hash);
+      return test.state === "new" ? { status: "new" } : test.state === "mismatch"
+        ? { status: "mismatch", existingHash: "different", providedHash: hash }
+        : { status: cached ? "cached" : test.state, request: record };
+    });
+    const response = await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:default/runs", {
+      method: "POST", headers: { authorization: "Bearer scheduler-secret-value-1234567890", "idempotency-key": key }, body: rawBody,
+    }), { params: Promise.resolve({ graphId: "langgraph:default" }) });
+    const forbidden = test.grant && test.grantState !== "live";
+    const expected = test.state === "mismatch" ? 422 : cached ? 200 : forbidden ? 403 : test.state === "pending" ? 409 : 200;
+    expect(response.status).toBe(expected);
+    if (cached) {
+      expect(await response.json()).toEqual({ ok: record.ok, runId: RUN_ID, traceId: "original-trace", ...(record.ok ? {} : { error: "timeout" }) });
+      expect(mocks.validateGrant).not.toHaveBeenCalled();
+      expect(mocks.billingAccount).not.toHaveBeenCalled();
+      expect(mocks.markRunCompleted).toHaveBeenCalledWith(expect.anything(), RUN_ID, record.ok ? "success" : "error", record.ok ? undefined : "Graph execution failed", record.ok ? undefined : "timeout");
+    }
+    if (cached || expected !== 200) {
+      expect(mocks.runGraph).not.toHaveBeenCalled();
+      expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+      expect(mocks.heartbeatRequest).not.toHaveBeenCalled();
+      expect(mocks.finalizeRequest).not.toHaveBeenCalled();
+      expect(mocks.patchRunStateKey).not.toHaveBeenCalled();
+      if (!cached) expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.runGraph).toHaveBeenCalledOnce();
+      expect(mocks.scopedRunKind).toBe(test.kind);
+      expect(mocks.createPendingRequest).toHaveBeenCalledWith(key, hash, RUN_ID, expect.any(String), expect.any(String));
+    }
+  });
+
+  it.each(["graphId", "requestedBy", "runKind", "triggerSource"])("refuses cached grant identity mismatch: %s", async (field) => {
+    mocks.checkIdempotency.mockResolvedValue({ status: "cached", request: { runId: RUN_ID, ok: true } });
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, runKind: "system_webhook", triggerSource: "webhook:github", [field]: "forged" });
+    expect((await invoke({ runId: RUN_ID, executionGrantId: GRANT_ID, input: BASE_INPUT })).status).toBe(409);
+    expect(mocks.validateGrant).not.toHaveBeenCalled();
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("refuses subjectless replay against a subjectful webhook ledger", async () => {
+    mocks.checkIdempotency.mockResolvedValue({ status: "cached", request: { runId: RUN_ID, ok: true } });
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, runKind: "system_webhook", triggerSource: "webhook:github" });
+    expect((await invoke({ runId: RUN_ID, input: { ...BASE_INPUT, actorUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID } })).status).toBe(409);
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a supplied hash override for grant-backed replay", async () => {
+    const storedHash = "a".repeat(64);
+    mocks.checkIdempotency.mockImplementation(async (_key, hash) => hash === storedHash
+      ? { status: "cached", request: { runId: RUN_ID, ok: true } }
+      : { status: "mismatch", existingHash: storedHash, providedHash: hash });
+    expect((await invoke({ runId: RUN_ID, executionGrantId: GRANT_ID,
+      input: { ...BASE_INPUT, actorUserId: "forged", executionRequestHash: storedHash } })).status).toBe(422);
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("hands a bound unleased API facade preclaim to execution", async () => {
+    mocks.checkIdempotency.mockResolvedValue({ status: "pending", request: { runId: RUN_ID, ok: null, leaseExpiresAt: null } });
+    expect((await invoke({ runId: RUN_ID, input: { ...BASE_INPUT, executionRequestHash: "a".repeat(64) } })).status).toBe(200);
+    expect(mocks.heartbeatRequest).toHaveBeenCalled();
+    expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+    expect(mocks.runGraph).toHaveBeenCalledOnce();
+  });
+
+  it("authenticates before reading or replaying a completed request", async () => {
+    mocks.checkIdempotency.mockResolvedValue({ status: "cached", request: { runId: RUN_ID, ok: true } });
+    const response = await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:default/runs", {
+      method: "POST", headers: { authorization: "Bearer wrong", "idempotency-key": "api:test" },
+      body: JSON.stringify({ runId: RUN_ID, input: BASE_INPUT }),
+    }), { params: Promise.resolve({ graphId: "langgraph:default" }) });
+    expect(response.status).toBe(401);
+    expect(mocks.checkIdempotency).not.toHaveBeenCalled();
+    expect(mocks.getRunByRunId).not.toHaveBeenCalled();
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false].flatMap((ok) => [USER_ID, COGNI_SYSTEM_PRINCIPAL_USER_ID].map((user) => ({ ok, user }))))(
+    "replays a matching claim-race result: $ok / $user", async ({ ok, user }) => {
+      mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, runKind: "system_webhook", triggerSource: "webhook:github",
+        requestedBy: user === COGNI_SYSTEM_PRINCIPAL_USER_ID ? null : user });
+      mocks.createPendingRequest.mockResolvedValue({ status: "cached", request: { runId: RUN_ID, ok, traceId: "original", errorCode: ok ? null : "timeout" } });
+      const response = await invoke({ runId: RUN_ID, input: { ...BASE_INPUT, actorUserId: user } });
+      expect(await response.json()).toEqual({ ok, runId: RUN_ID, traceId: "original", ...(ok ? {} : { error: "timeout" }) });
+      expect(response.status).toBe(200);
+      expect(mocks.markRunCompleted).toHaveBeenCalledOnce();
+      expect(mocks.runGraph).not.toHaveBeenCalled();
+      expect(mocks.heartbeatRequest).not.toHaveBeenCalled();
+      expect(mocks.finalizeRequest).not.toHaveBeenCalled();
+    });
 
   it.each(["cogni", "work-prioritizer"])("marks only a validated schedule of %s unattended", async (graph) => {
     for (const scheduled of [false, true]) {
