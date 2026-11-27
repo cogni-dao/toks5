@@ -120,7 +120,6 @@ export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
  * `SAME_DOOR_ROUTES` / `ROUTE_ONLY_CAPABILITIES`.
  */
 export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
-  "work.items.delete": "retired (HTTP 410); no capability to gate",
   "knowledge.domains.update": "domain registry writes; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
   "knowledge.domains.delete": "domain registry writes; C2 design question (task.5465); a bearer is refused by deny-by-default (bug.0045)",
 };

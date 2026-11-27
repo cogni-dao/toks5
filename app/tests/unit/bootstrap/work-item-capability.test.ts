@@ -509,3 +509,36 @@ describe("recordArtifact (task.0122)", () => {
     await expect(cap.recordArtifact?.({ id: "task.5001", body })).rejects.toThrow("principal is required");
   });
 });
+
+describe("published writer attribution", () => {
+  it("uses the run principal, requester and ledger run for a patch; missing principal refuses", async () => {
+    const { createWorkItemWriters } = await import("@cogni/work-items");
+    const { getExecutionScope, runInScope } = await import("@/adapters/server/ai/execution-scope");
+    const store = { patch: vi.fn().mockResolvedValue(storedItem) };
+    const writers = createWorkItemWriters({
+      log: { info: vi.fn(), warn: vi.fn() },
+      scope: getExecutionScope,
+      traceId: () => undefined,
+      store: () => store,
+      artifacts: () => undefined,
+    });
+    const scope = {
+      billing: {} as never,
+      llmService: {} as never,
+      usageSource: "litellm" as never,
+      principalId: "agent-principal",
+      subjectUserId: "requester",
+      runId: "run-1",
+      runKind: "system_scheduled" as const,
+    };
+    await runInScope(scope, () => writers.backlogWriter.store.patch(
+      { id: toWorkItemId("task.5001"), reason: "test", set: { rank: 2 } },
+      writers.backlogWriter.attribution(),
+    ));
+    expect(store.patch).toHaveBeenCalledWith(expect.anything(), {
+      actor: "agent-principal", requestedBy: "requester", run: { id: "run-1", kind: "system_scheduled" },
+    });
+    expect(() => runInScope({ ...scope, principalId: undefined }, writers.backlogWriter.attribution)).toThrow();
+    expect(store.patch).toHaveBeenCalledTimes(1);
+  });
+});

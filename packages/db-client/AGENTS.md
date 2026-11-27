@@ -78,6 +78,7 @@ pnpm --filter @cogni/db-client build
 
 - Per FORBIDDEN: No `@/`, `src/`, `process.env`, or Next.js imports
 - Per ALLOWED: Pure database operations via Drizzle ORM
+- Graph-run creation serializes by runId with a PostgreSQL transaction advisory lock; returns the canonical row without resetting it. Scheduled-slot uniqueness and null-slot history remain intact. Ambiguous historical runIds fail closed.
 - Adapters implement port interfaces from `@cogni/scheduler-core` and `@cogni/attribution-ledger`
 
 ## Dependencies
@@ -101,4 +102,4 @@ pnpm --filter @cogni/db-client build
 
 Pool options inject a positive integer `max` and optional `applicationName`. Generic defaults remain 10; owning runtimes choose their aggregate role budgets.
 
-Last reviewed: 2026-10-24 (bug.5529).
+Last reviewed: 2026-11-27 (PR84 canonical run identity repair).

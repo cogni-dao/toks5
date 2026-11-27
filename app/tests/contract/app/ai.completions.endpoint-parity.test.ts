@@ -547,22 +547,28 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
   });
 
   describe("streaming response parity", () => {
-    it("keeps facade preclaim identity distinct from original worker callback identity", async () => {
-      const { executionRequestPort } = setupMocks();
+    it("reserves the caller-scoped claim forwarded through workflow provenance", async () => {
+      const { executionRequestPort, temporal } = setupMocks();
       const { POST } = await import("@/app/api/v1/chat/completions/route");
-      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
-        method: "POST",
-        body: JSON.stringify(createCompletionRequest({ stream: true })),
-      }));
+      const response = await POST(
+        new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST",
+          body: JSON.stringify(createCompletionRequest({ stream: true })),
+        })
+      );
       await response.text();
       expect(executionRequestPort.createPendingRequest).toHaveBeenCalledOnce();
       const claim = executionRequestPort.createPendingRequest.mock.calls[0];
       if (!claim) throw new Error("missing facade preclaim");
-      const [facadeKey, , runId] = claim;
-      expect(facadeKey).toMatch(/^ai:/);
-      // Original worker callback uses api:<runId>; no key rewrite or adoption change is implied.
-      const originalWorkerKey = `api:${runId}`;
-      expect(facadeKey).not.toBe(originalWorkerKey);
+      const [facadeKey, requestHash, runId] = claim;
+      const workflow = temporal.client.start.mock.calls[0]?.[1]?.args?.[0];
+      expect(facadeKey).toMatch(/^ai:[0-9a-f]{64}$/);
+      expect(workflow).toMatchObject({
+        runId,
+        triggerRef: facadeKey,
+        input: { executionRequestHash: requestHash },
+      });
+      expect(facadeKey).not.toBe(`api:${runId}`);
     });
 
     it("returns 409 before execution when an idempotency key is reused with changed input", async () => {
@@ -604,6 +610,61 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
         error: { code: "idempotency_conflict" },
       });
       expect(temporal.client.start).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      "messages",
+      "graph",
+    ])("keeps concurrent changed %s completions on one caller claim", async (change) => {
+      const { executionRequestPort, temporal } = setupMocks();
+      const { completionStream, CompletionIdempotencyConflictError } =
+        await import("@/app/_facades/ai/completion.server");
+      const call = (changed: boolean) =>
+        completionStream(
+          {
+            messages: [
+              {
+                role: "user",
+                content: changed && change === "messages" ? "different" : "first",
+              },
+            ],
+            modelRef: { providerKey: "platform", modelId: TEST_MODEL_ID },
+            sessionUser: TEST_SESSION_USER_1,
+            graphName:
+              changed && change === "graph"
+                ? "langgraph:other"
+                : "langgraph:default",
+            idempotencyKey: "concurrent-caller",
+          },
+          {
+            reqId: changed ? "request-2" : "request-1",
+            traceId: "trace",
+            routeId: "test",
+            log: makeNoopLogger(),
+            clock: { now: () => new Date().toISOString() },
+          }
+        );
+      const results = await Promise.allSettled([call(false), call(true)]);
+      expect(results.map((result) => result.status).sort()).toEqual([
+        "fulfilled",
+        "rejected",
+      ]);
+      for (const result of results) {
+        if (result.status === "rejected")
+          expect(result.reason).toBeInstanceOf(
+            CompletionIdempotencyConflictError
+          );
+        else
+          for await (const _event of result.value.stream) {
+            /* drain fixture subscription */
+          }
+      }
+      expect(temporal.client.start).toHaveBeenCalledOnce();
+      const keys = executionRequestPort.createPendingRequest.mock.calls.map(
+        ([key]) => key
+      );
+      expect(new Set(keys).size).toBe(1);
+      expect(keys[0]).toMatch(/^ai:[0-9a-f]{64}$/);
     });
 
     it("maps a first execution error event before committing SSE headers", async () => {

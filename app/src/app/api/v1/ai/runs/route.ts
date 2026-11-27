@@ -39,7 +39,7 @@ function handleRouteError(
  * Lists graph runs for the authenticated user, ordered by started_at DESC.
  * Supports filtering by status and runKind, with cursor-based pagination.
  *
- * Query params: status?, runKind?, limit? (default 20, max 100), cursor? (ISO datetime)
+ * Query params: status?, runKind?, limit? (default 20, max 100), cursor? (versioned timestamp/id or legacy ISO datetime)
  *
  * HTTP responses:
  * - 200: { runs: RunCard[], nextCursor?: string }
@@ -103,7 +103,7 @@ export const GET = wrapRouteHandlerWithLogging(
         ...(hasMore && pageRuns.length > 0
           ? {
               nextCursor:
-                pageRuns[pageRuns.length - 1]?.startedAt?.toISOString(),
+                `v1|${pageRuns[pageRuns.length - 1]?.startedAt?.toISOString() ?? "null"}|${pageRuns[pageRuns.length - 1]?.id}`,
             }
           : {}),
       });

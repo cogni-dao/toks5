@@ -71,8 +71,15 @@ export const POST = wrapRouteHandlerWithLogging(
     } = parsed.data;
     const container = getContainer();
 
+    const matches = (run: NonNullable<Awaited<ReturnType<typeof container.graphRunRepository.getRunByRunId>>>) =>
+      run.runId === runId && run.graphId === (graphId ?? null) &&
+      run.runKind === (runKind ?? null) && run.triggerSource === (triggerSource ?? null) &&
+      run.triggerRef === (triggerRef ?? null) && run.requestedBy === (requestedBy ?? null) &&
+      run.scheduleId === (scheduleId ?? null) &&
+      (run.scheduledFor?.getTime() ?? null) === (scheduledFor ? new Date(scheduledFor).getTime() : null);
+
     try {
-      await container.graphRunRepository.createRun(SYSTEM_ACTOR, {
+      const created = await container.graphRunRepository.createRun(SYSTEM_ACTOR, {
         runId,
         ...(graphId ? { graphId } : {}),
         ...(runKind ? { runKind } : {}),
@@ -83,6 +90,11 @@ export const POST = wrapRouteHandlerWithLogging(
         ...(scheduledFor ? { scheduledFor: new Date(scheduledFor) } : {}),
         ...(stateKey ? { stateKey } : {}),
       });
+      // Scheduled-slot inserts can return an existing canonical row without
+      // throwing. A different identity is a conflict, never a successful create.
+      if (!matches(created)) {
+        return NextResponse.json({ error: "Graph run identity mismatch" }, { status: 409 });
+      }
     } catch (err) {
       // Idempotency: if a row with this runId already exists, treat as success.
       const existing = await container.graphRunRepository
@@ -91,6 +103,9 @@ export const POST = wrapRouteHandlerWithLogging(
       if (!existing) {
         log.error({ runId, err }, "Failed to create graph run");
         return NextResponse.json({ error: "Internal error" }, { status: 500 });
+      }
+      if (!matches(existing)) {
+        return NextResponse.json({ error: "Graph run identity mismatch" }, { status: 409 });
       }
       log.info({ runId }, "Idempotent create: row already exists");
     }

@@ -32,7 +32,10 @@ export interface GraphRunRepository {
   /**
    * Creates a run record. Status defaults to 'pending'.
    * For scheduled runs: scheduleId + scheduledFor provide slot uniqueness.
-   * For API/webhook runs: scheduleId is null.
+   * Returns the existing canonical row for a repeated runId, without resetting
+   * its facts or status. Concurrent creators must converge atomically.
+   * For API/webhook runs: scheduleId is null. Historical duplicate runIds fail
+   * closed; creation never rewrites or deletes history.
    * @param actorId - Actor performing the operation (for RLS SET LOCAL / audit trail)
    */
   createRun: (
@@ -83,7 +86,7 @@ export interface GraphRunRepository {
   getRunByRunId: (actorId: ActorId, runId: string) => Promise<GraphRun | null>;
 
   /**
-   * Lists runs for a user, ordered by started_at DESC with cursor-based pagination.
+   * Lists runs for a user, ordered by millisecond started_at DESC NULLS LAST, id DESC.
    * @param actorId - Actor performing the operation (for RLS SET LOCAL / audit trail)
    * @param userId - Used for RLS tenant scoping (sets app.current_user_id)
    * @param opts - Filtering and pagination options
@@ -95,7 +98,7 @@ export interface GraphRunRepository {
       status?: GraphRunStatus;
       runKind?: GraphRunKind;
       limit?: number;
-      /** ISO string cursor — returns runs with started_at < cursor */
+      /** v1|ISO-or-null|row-id cursor; legacy ISO timestamp cursors remain accepted. */
       cursor?: string;
     }
   ) => Promise<GraphRun[]>;

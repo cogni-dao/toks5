@@ -12,7 +12,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { DEFERRED_WRITE_ROUTES, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { bearerWriteRefusal, DEFERRED_WRITE_ROUTES, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
 import { describe, expect, it } from "vitest";
 
 const API = resolve(__dirname, "../../../src/app/api");
@@ -169,6 +169,7 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       "payer-bindings.revoke",
       // Node-admin only through the one admin check, any credential: signs and posts one ask to a configured node, writes no grant on either side.
       "service-links.ask",
+      "work.items.delete",
     ]);
   });
 
@@ -178,6 +179,15 @@ describe("DENY_BY_DEFAULT: every bearer-capable write route declares a door, an 
       expect(ids.has(id), id).toBe(true);
       expect(REFUSED_FOR_BEARERS[id]?.length, id).toBeGreaterThan(20);
     }
+  });
+
+  it("retired work-item DELETE declares its nonmutating 410 while real undeclared mutations stay denied", () => {
+    const retired = capable.find((e) => e.routeId === "work.items.delete");
+    expect(retired).toMatchObject({ method: "DELETE", bearerWrite: true, sameDoor: false });
+    expect("work.items.delete" in DEFERRED_WRITE_ROUTES).toBe(false);
+    expect("work.items.delete" in REFUSED_FOR_BEARERS).toBe(false);
+    expect(bearerWriteRefusal({ via: "bearer", method: "DELETE", routeId: "work.items.delete", doorRuns: false, bearerWrite: "Retired deletion returns advice without mutation." })).toBeNull();
+    expect(bearerWriteRefusal({ via: "bearer", method: "PATCH", routeId: "work.items.patch", doorRuns: false })).toEqual({ code: "bearer_write_undeclared" });
   });
 
   it("the deferred list is bearer-refused too: every entry is a bearer-capable write route with no door", () => {

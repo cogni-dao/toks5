@@ -23,7 +23,7 @@ import type {
   GraphRunRepository,
   GraphRunStatus,
 } from "@cogni/scheduler-core";
-import { and, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Database, LoggerLike } from "../client";
 import { withTenantScope } from "../tenant-scope";
 
@@ -45,7 +45,8 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
   /**
    * Creates a graph run record.
    * For scheduled runs: idempotent via UNIQUE(schedule_id, scheduled_for).
-   * For API/webhook runs: plain insert (scheduleId is null).
+   * All writers serialize by runId before reading or inserting. Scheduled slots
+   * retain their separate history key; no historical rows are rewritten.
    */
   async createRun(
     actorId: ActorId,
@@ -62,6 +63,18 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
     }
   ): Promise<GraphRun> {
     return withTenantScope(this.db, actorId, async (tx) => {
+      // The ledger predates runId uniqueness. Serialize the repository's writers
+      // without imposing a new constraint on historical schedule records.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`graph-run:${params.runId}`}, 0))`
+      );
+      const existing = await tx.select().from(graphRuns)
+        .where(eq(graphRuns.runId, params.runId)).limit(2);
+      if (existing.length > 1) {
+        throw new Error("Ambiguous historical graph run identity");
+      }
+      if (existing[0]) return this.toRun(existing[0]);
+
       const values = {
         runId: params.runId,
         graphId: params.graphId ?? null,
@@ -76,25 +89,9 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
       };
 
       if (params.scheduleId && params.scheduledFor) {
-        // Scheduled run — insert optimistically, then re-select on duplicate.
-        // This avoids relying on ON CONFLICT inference against a partial unique index.
-        try {
-          await tx.insert(graphRuns).values(values);
-        } catch (error) {
-          const [existing] = await tx
-            .select()
-            .from(graphRuns)
-            .where(
-              and(
-                eq(graphRuns.scheduleId, params.scheduleId),
-                eq(graphRuns.scheduledFor, params.scheduledFor)
-              )
-            );
-
-          if (!existing) {
-            throw error;
-          }
-        }
+        // A different runId may race for this schedule slot. PostgreSQL
+        // resolves the partial unique index without aborting our transaction.
+        await tx.insert(graphRuns).values(values).onConflictDoNothing();
 
         // Always SELECT to get the row (new or existing)
         const [row] = await tx
@@ -119,7 +116,7 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
         return this.toRun(row);
       }
 
-      // Non-scheduled run — plain insert
+      // Non-scheduled run — the runId transaction lock owns this insert
       const [row] = await tx.insert(graphRuns).values(values).returning();
 
       if (!row) {
@@ -199,13 +196,15 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
     runId: string
   ): Promise<GraphRun | null> {
     return withTenantScope(this.db, actorId, async (tx) => {
-      const [row] = await tx
+      const rows = await tx
         .select()
         .from(graphRuns)
         .where(eq(graphRuns.runId, runId))
-        .limit(1);
-
-      return row ? this.toRun(row) : null;
+        .limit(2);
+      if (rows.length > 1) {
+        throw new Error("Ambiguous historical graph run identity");
+      }
+      return rows[0] ? this.toRun(rows[0]) : null;
     });
   }
 
@@ -239,7 +238,7 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
       // security boundary (user sees own runs + schedule-owned runs), but this
       // WHERE clause ensures user-scope queries don't return system runs and
       // system-scope queries don't return user runs. Defense-in-depth.
-      const conditions: ReturnType<typeof eq>[] = [
+      const conditions: (ReturnType<typeof eq> | undefined)[] = [
         eq(graphRuns.requestedBy, userId),
       ];
 
@@ -249,15 +248,47 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
       if (opts?.runKind) {
         conditions.push(eq(graphRuns.runKind, opts.runKind));
       }
+      // JS Date exposes millisecond precision. Use the same precision in SQL
+      // ordering and comparisons, including historical sub-millisecond starts.
+      const startedAt = sql`date_trunc('milliseconds', ${graphRuns.startedAt})`;
       if (opts?.cursor) {
-        conditions.push(lt(graphRuns.startedAt, new Date(opts.cursor)));
+        if (opts.cursor.startsWith("v1|")) {
+          const [, timestamp, id] = opts.cursor.split("|");
+          if (
+            !id ||
+            !timestamp ||
+            (timestamp !== "null" && Number.isNaN(Date.parse(timestamp)))
+          ) {
+            throw new Error("Invalid run history cursor");
+          }
+          // SQL expressions have no timestamp-column encoder: bind ISO text
+          // explicitly as timestamptz, matching started_at even outside UTC.
+          const cursorDate =
+            timestamp === "null"
+              ? null
+              : sql`${new Date(timestamp).toISOString()}::timestamptz`;
+          conditions.push(
+            cursorDate === null
+              ? and(isNull(graphRuns.startedAt), lt(graphRuns.id, id))
+              : or(
+                  lt(startedAt, cursorDate),
+                  and(eq(startedAt, cursorDate), lt(graphRuns.id, id)),
+                  isNull(graphRuns.startedAt)
+                )
+          );
+        } else {
+          const cursorDate = sql`${new Date(opts.cursor).toISOString()}::timestamptz`;
+          conditions.push(
+            or(lt(startedAt, cursorDate), isNull(graphRuns.startedAt))
+          );
+        }
       }
 
       const rows = await tx
         .select()
         .from(graphRuns)
         .where(and(...conditions))
-        .orderBy(desc(graphRuns.startedAt))
+        .orderBy(sql`${startedAt} DESC NULLS LAST`, desc(graphRuns.id))
         .limit(pageSize + 1); // fetch one extra to detect next page
 
       return rows.map((row) => this.toRun(row));

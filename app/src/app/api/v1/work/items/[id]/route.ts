@@ -117,7 +117,11 @@ export const PATCH = wrapRouteHandlerWithLogging<{
 export const DELETE = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
-  { routeId: "work.items.delete", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "work.items.delete",
+    bearerWrite: "Retired deletion only returns cancellation advice and never mutates an item.",
+    auth: { mode: "required", getSessionUser },
+  },
   async (_ctx, _request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     if (!sessionUser)

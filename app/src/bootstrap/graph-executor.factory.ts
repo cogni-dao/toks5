@@ -1,3 +1,4 @@
+import type { WriteRunKind } from "@cogni/work-items";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -157,6 +158,7 @@ export function createScopedGraphExecutor(params: {
   readonly broker?: ConnectionBrokerPort;
   readonly resolver: ModelProviderResolverPort;
   readonly actorId: string;
+  readonly runKind?: WriteRunKind | undefined;
 }): GraphExecutorPort {
   const container = getContainer();
 
@@ -272,6 +274,7 @@ export function createScopedGraphExecutor(params: {
             billing: params.billing,
             llmService,
             usageSource: provider.usageSource,
+            runKind: params.runKind,
             ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
           });
 
@@ -293,6 +296,7 @@ export function createScopedGraphExecutor(params: {
         billing: params.billing,
         llmService,
         usageSource: provider.usageSource,
+        runKind: params.runKind,
         ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       });
     },
@@ -315,6 +319,7 @@ export function runGraphWithScope(params: {
   readonly billing: BillingContext;
   readonly llmService: LlmService;
   readonly usageSource: SourceSystem;
+  readonly runKind?: WriteRunKind | undefined;
   readonly abortSignal?: AbortSignal;
 }): GraphRunResult {
   const { executor, req, ctx, billing, llmService, usageSource } = params;
@@ -324,6 +329,8 @@ export function runGraphWithScope(params: {
       modelRef: req.modelRef,
       llmService,
       usageSource,
+      runId: req.runId,
+      ...(params.runKind ? { runKind: params.runKind } : {}),
       // THREE_IDENTITIES: the authenticated caller is the subject, bearer agents included. The system
       // principal never acts as a subject; a run with no caller has none.
       ...(ctx?.actorUserId && ctx.actorUserId !== COGNI_SYSTEM_PRINCIPAL_USER_ID

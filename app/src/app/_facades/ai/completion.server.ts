@@ -443,18 +443,21 @@ export async function completionStream(
     serverEnv().AUTH_SECRET
   );
 
+  // Bind the caller key independently of graph-derived historical run IDs.
+  // Admission resolves this claim from the workflow's durable triggerRef.
+  const executionKey = idempotencyKey;
   // Claim the global execution_requests slot before Temporal starts. Recheck
   // after INSERT so concurrent different-payload callers cannot both proceed.
   const executionRequests = getContainer().executionRequestPort;
   let idempotency = await executionRequests.checkIdempotency(
-    idempotencyKey,
+    executionKey,
     requestHash
   );
   if (idempotency.status === "new") {
     let createError: unknown;
     try {
       await executionRequests.createPendingRequest(
-        idempotencyKey,
+        executionKey,
         requestHash,
         runId,
         ctx.traceId
@@ -463,7 +466,7 @@ export async function completionStream(
       createError = error;
     }
     idempotency = await executionRequests.checkIdempotency(
-      idempotencyKey,
+      executionKey,
       requestHash
     );
     if (idempotency.status === "new") {

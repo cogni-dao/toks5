@@ -36,7 +36,15 @@ export const listRunsOperation = {
     status: z.enum(GRAPH_RUN_STATUSES).optional(),
     runKind: z.enum(GRAPH_RUN_KINDS).optional(),
     limit: z.number().int().min(1).max(100).default(20),
-    cursor: z.string().datetime().optional(),
+    cursor: z.union([
+      z.string().datetime(), // Legacy timestamp-only links remain readable.
+      z.string().max(128).refine((value) => {
+        const [version, startedAt, id, extra] = value.split("|");
+        return version === "v1" && extra === undefined &&
+          (startedAt === "null" || z.string().datetime().safeParse(startedAt).success) &&
+          z.string().uuid().safeParse(id).success;
+      }, "Invalid run history cursor"),
+    ]).optional(),
   }),
   output: z.object({
     runs: z.array(

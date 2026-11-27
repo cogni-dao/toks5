@@ -79,6 +79,7 @@ pnpm --filter @cogni/scheduler-core build
 
 - Per `FORBIDDEN`: No `@/`, `src/`, `drizzle-orm`, or any I/O
 - Per `ALLOWED`: Pure TypeScript types/interfaces only
+- GraphRunRepository creation returns one canonical identity atomically; retries preserve stored facts and status, including scheduled history.
 - All exports must be serialization-safe (no Date objects in port interfaces, use ISO strings)
 
 ## Dependencies
