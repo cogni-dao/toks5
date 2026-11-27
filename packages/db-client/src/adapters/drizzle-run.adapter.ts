@@ -254,18 +254,33 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
       if (opts?.cursor) {
         if (opts.cursor.startsWith("v1|")) {
           const [, timestamp, id] = opts.cursor.split("|");
-          if (!id || !timestamp || (timestamp !== "null" && Number.isNaN(Date.parse(timestamp)))) {
+          if (
+            !id ||
+            !timestamp ||
+            (timestamp !== "null" && Number.isNaN(Date.parse(timestamp)))
+          ) {
             throw new Error("Invalid run history cursor");
           }
-          conditions.push(timestamp === "null"
-            ? and(isNull(graphRuns.startedAt), lt(graphRuns.id, id))
-            : or(
-                lt(startedAt, new Date(timestamp)),
-                and(eq(startedAt, new Date(timestamp)), lt(graphRuns.id, id)),
-                isNull(graphRuns.startedAt)
-              ));
+          // SQL expressions have no timestamp-column encoder: bind ISO text
+          // explicitly as timestamptz, matching started_at even outside UTC.
+          const cursorDate =
+            timestamp === "null"
+              ? null
+              : sql`${new Date(timestamp).toISOString()}::timestamptz`;
+          conditions.push(
+            cursorDate === null
+              ? and(isNull(graphRuns.startedAt), lt(graphRuns.id, id))
+              : or(
+                  lt(startedAt, cursorDate),
+                  and(eq(startedAt, cursorDate), lt(graphRuns.id, id)),
+                  isNull(graphRuns.startedAt)
+                )
+          );
         } else {
-          conditions.push(or(lt(startedAt, new Date(opts.cursor)), isNull(graphRuns.startedAt)));
+          const cursorDate = sql`${new Date(opts.cursor).toISOString()}::timestamptz`;
+          conditions.push(
+            or(lt(startedAt, cursorDate), isNull(graphRuns.startedAt))
+          );
         }
       }
 

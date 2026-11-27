@@ -443,9 +443,9 @@ export async function completionStream(
     serverEnv().AUTH_SECRET
   );
 
-  // The canonical worker delivers API executions under api:{runId}. Keep
-  // scoped workflow/run derivation, but reserve exactly the claim it executes.
-  const executionKey = `api:${runId}`;
+  // Bind the caller key independently of graph-derived historical run IDs.
+  // Admission resolves this claim from the workflow's durable triggerRef.
+  const executionKey = idempotencyKey;
   // Claim the global execution_requests slot before Temporal starts. Recheck
   // after INSERT so concurrent different-payload callers cannot both proceed.
   const executionRequests = getContainer().executionRequestPort;

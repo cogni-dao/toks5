@@ -190,7 +190,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     const graphId = rawGraphId as `${string}:${string}`;
 
     // --- 3. Idempotency-Key header (required) ---
-    const idempotencyKey = request.headers.get("idempotency-key");
+    let idempotencyKey = request.headers.get("idempotency-key");
     if (!idempotencyKey) {
       log.warn("Missing Idempotency-Key header");
       return NextResponse.json(
@@ -239,11 +239,63 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       suppliedRequestHash ?? computeRequestHash(graphId, rawBody);
 
     // --- 6. Check idempotency ---
-    const idempotencyResult =
+    let idempotencyResult =
       await container.executionRequestPort.checkIdempotency(
         idempotencyKey,
         requestHash
       );
+
+    // The worker wire key predates caller-scoped facade reservations. Resolve
+    // only through the ledger written by GraphRunWorkflow, never input overrides.
+    // Existing wire claims retain their outcomes/leases (including old workflows
+    // without executionRequestHash); never create a second claim for a facade.
+    if (
+      !executionGrantId &&
+      providedRunId &&
+      idempotencyKey === `api:${providedRunId}` &&
+      idempotencyResult.status === "new"
+    ) {
+      const provenance = await container.graphRunRepository.getRunByRunId(
+        SYSTEM_ACTOR,
+        providedRunId
+      );
+      if (provenance?.triggerRef?.startsWith("ai:") || suppliedRequestHash) {
+        if (
+          !provenance ||
+          provenance.runId !== providedRunId ||
+          provenance.graphId !== graphId ||
+          provenance.runKind !== "user_immediate" ||
+          provenance.triggerSource !== "api" ||
+          provenance.requestedBy !== input.actorUserId ||
+          !/^ai:[0-9a-f]{64}$/.test(provenance.triggerRef ?? "") ||
+          !suppliedRequestHash
+        ) {
+          return NextResponse.json(
+            { error: "Graph run claim provenance missing or mismatched" },
+            { status: 409 }
+          );
+        }
+        const callerKey = provenance.triggerRef;
+        if (!callerKey)
+          return NextResponse.json(
+            { error: "Graph run claim provenance missing" },
+            { status: 409 }
+          );
+        const callerClaim =
+          await container.executionRequestPort.checkIdempotency(
+            callerKey,
+            requestHash
+          );
+        if (callerClaim.status === "new") {
+          return NextResponse.json(
+            { error: "Graph run caller claim missing" },
+            { status: 409 }
+          );
+        }
+        idempotencyKey = callerKey;
+        idempotencyResult = callerClaim;
+      }
+    }
 
     if (idempotencyResult.status === "mismatch") {
       // Same idempotency key but different payload - reject
