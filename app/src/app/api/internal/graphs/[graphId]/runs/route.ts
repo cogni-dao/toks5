@@ -275,12 +275,13 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       runId = canonicalRunId;
     }
 
-    // A system execution identity has no subject, exactly as runGraphWithScope.
-    const subjectFor = (userId: string): string | null =>
+    // System ownership remains durable provenance, but supplies no subject,
+    // exactly as runGraphWithScope. Normalize both sides only for comparison.
+    const subjectFor = (userId: string | null): string | null =>
       userId === COGNI_SYSTEM_PRINCIPAL_USER_ID ? null : userId;
     type DurableRun = NonNullable<Awaited<ReturnType<typeof container.graphRunRepository.getRunByRunId>>>;
     const isBoundRun = (run: DurableRun | null, expectedRunId: string, subjectUserId: string | null): run is DurableRun & { runKind: NonNullable<DurableRun["runKind"]> } => {
-      if (!run || run.runId !== expectedRunId || run.graphId !== graphId || run.requestedBy !== subjectUserId) return false;
+      if (!run || run.runId !== expectedRunId || run.graphId !== graphId || subjectFor(run.requestedBy) !== subjectFor(subjectUserId)) return false;
       switch (run.runKind) {
         case "system_scheduled":
           return Boolean(executionGrantId) && run.triggerSource === "temporal_schedule" &&

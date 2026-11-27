@@ -189,7 +189,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, runKind: test.kind, triggerSource: test.source,
       triggerRef: test.kind === "system_scheduled" ? "schedule" : "delivery-1",
       scheduledFor: test.kind === "system_scheduled" ? scheduledFor : null,
-      requestedBy: test.user === COGNI_SYSTEM_PRINCIPAL_USER_ID ? null : test.user });
+      requestedBy: test.kind === "system_scheduled" ? test.user : test.user === COGNI_SYSTEM_PRINCIPAL_USER_ID ? null : test.user });
     mocks.validateGrant.mockResolvedValue({ userId: test.user, billingAccountId: BILLING_ID });
     if (test.grantState === "expired" || test.grantState === "revoked") {
       const error = new Error(`Grant ${test.grantState}`);
@@ -236,6 +236,65 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
       expect(mocks.createPendingRequest).toHaveBeenCalledWith(key, hash, RUN_ID, expect.any(String), expect.any(String));
     }
   });
+
+  it.each(["new", "pending", "stale", "success", "error"].flatMap((state) =>
+    [false, true].map((humanMismatch) => ({ state, humanMismatch }))))(
+    "binds persisted governance SYSTEM requester: $state / human mismatch $humanMismatch", async ({ state, humanMismatch }) => {
+      const scheduledFor = "2026-01-01T00:00:00.000Z";
+      const key = `schedule:${scheduledFor}`;
+      // syncGovernanceSchedules owns the schedule as cogni_system;
+      // schedule-control -> GraphRunWorkflow -> createGraphRunActivity forwards
+      // that requester unchanged. Exercise the real creation route with it.
+      let durable: Record<string, unknown> | null = null;
+      mocks.getRunByRunId.mockImplementation(async () => durable);
+      mocks.createRun.mockImplementation(async (_actor, facts) => {
+        durable = { ...BASE_RUN, ...facts };
+        return durable;
+      });
+      const facts = { runId: RUN_ID, graphId: "langgraph:default", runKind: "system_scheduled",
+        triggerSource: "temporal_schedule", triggerRef: "schedule", requestedBy: COGNI_SYSTEM_PRINCIPAL_USER_ID,
+        scheduledFor };
+      expect((await create(facts)).status).toBe(200);
+      expect(durable).toMatchObject({ ...facts, scheduledFor: new Date(scheduledFor) });
+      const stored = { ...durable };
+      mocks.createRun.mockClear();
+      mocks.validateGrant.mockResolvedValue({ userId: COGNI_SYSTEM_PRINCIPAL_USER_ID, billingAccountId: BILLING_ID });
+      const { actorUserId: _user, ...context } = BASE_INPUT;
+      const body = { runId: RUN_ID, executionGrantId: GRANT_ID,
+        input: { ...context, ...(humanMismatch ? { actorUserId: USER_ID } : {}) } };
+      const rawBody = JSON.stringify(body);
+      const hash = createHash("sha256").update("langgraph:default\n").update(rawBody).digest("hex");
+      const cached = state === "success" || state === "error";
+      const record = { runId: RUN_ID, requestHash: hash, traceId: "original-trace", ok: state === "success",
+        errorCode: state === "error" ? "timeout" : null,
+        leaseExpiresAt: state === "stale" ? "2020-01-01T00:00:00.000Z" : "2099-01-01T00:00:00.000Z" };
+      mocks.checkIdempotency.mockResolvedValue(state === "new" ? { status: "new" } : { status: cached ? "cached" : state, request: record });
+      const response = await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:default/runs", {
+        method: "POST", headers: { authorization: "Bearer scheduler-secret-value-1234567890", "idempotency-key": key }, body: rawBody,
+      }), { params: Promise.resolve({ graphId: "langgraph:default" }) });
+      expect(response.status).toBe(humanMismatch || state === "pending" ? 409 : 200);
+      expect(durable).toEqual(stored);
+      expect(mocks.createRun).not.toHaveBeenCalled();
+      if (humanMismatch || state === "pending" || cached) {
+        expect(mocks.runGraph).not.toHaveBeenCalled();
+        expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+        expect(mocks.heartbeatRequest).not.toHaveBeenCalled();
+        expect(mocks.finalizeRequest).not.toHaveBeenCalled();
+        expect(mocks.patchRunStateKey).not.toHaveBeenCalled();
+        if (humanMismatch || state === "pending") expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.runGraph).toHaveBeenCalledOnce();
+        expect(mocks.createPendingRequest).toHaveBeenCalledWith(key, hash, RUN_ID, expect.any(String), expect.any(String));
+      }
+      if (cached) {
+        expect(mocks.validateGrant).not.toHaveBeenCalled();
+        expect(mocks.billingAccount).not.toHaveBeenCalled();
+        if (!humanMismatch) {
+          expect(await response.json()).toEqual({ ok: record.ok, runId: RUN_ID, traceId: "original-trace", ...(record.ok ? {} : { error: "timeout" }) });
+          expect(mocks.markRunCompleted).toHaveBeenCalledOnce();
+        }
+      }
+    });
 
   it.each(["graphId", "requestedBy", "runKind", "triggerSource"])("refuses cached grant identity mismatch: %s", async (field) => {
     mocks.checkIdempotency.mockResolvedValue({ status: "cached", request: { runId: RUN_ID, ok: true } });
