@@ -31,6 +31,7 @@ import {
   type InternalGraphRunOutput,
 } from "@cogni/node-contracts";
 import { AnalyticsEvents, capture, COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
+import type { ExecutionRequest } from "@cogni/scheduler-core";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getContainer } from "@/bootstrap/container";
@@ -350,20 +351,20 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       }
     };
 
-    if (idempotencyResult.status === "cached") {
-      const cachedRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, runId);
-      // A completed grant-backed request already validated its grant owner.
-      // Its exact-byte hash binds that grant and payload even when the scheduler
-      // omitted actorUserId. Explicit payload subjects must still agree.
-      const cachedSubject = typeof input.actorUserId === "string"
-        ? subjectFor(input.actorUserId)
-        : executionGrantId ? cachedRun?.requestedBy ?? null : null;
-      if ((!executionGrantId && typeof input.actorUserId !== "string") ||
-          !isBoundRun(cachedRun, runId, cachedSubject)) {
-        return NextResponse.json({ error: "Graph run facts missing or mismatched" }, { status: 409 });
+    // A terminal execution claim is the authority for its cached receipt. The
+    // idempotency port has already matched the exact request hash (or the
+    // authenticated facade digest) and the explicit runId was checked above.
+    // Historical producers could omit graph_runs, insert identical duplicate
+    // rows after a lost response, or leave migrated schedule identity null.
+    // Returning their completed receipt admits no new execution or identity.
+    const replayTerminal = async (cached: ExecutionRequest) => {
+      if (providedRunId && providedRunId !== cached.runId) {
+        return NextResponse.json(
+          { error: "Graph run identity mismatch" },
+          { status: 409 }
+        );
       }
       // Already processed - return cached result with original outcome
-      const cached = idempotencyResult.request;
       // The node execution path is the outcome truth-holder. Reconcile the run
       // ledger before returning so a lost worker response cannot leave a
       // successfully finalized execution_request paired with graph_runs=running.
@@ -395,6 +396,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         };
         return NextResponse.json(cachedResponse, { status: 200 });
       }
+    };
+
+    if (idempotencyResult.status === "cached") {
+      return replayTerminal(idempotencyResult.request);
     }
 
     // --- 7/8. Resolve execution identity ---
@@ -629,29 +634,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         );
       if (claimResult.status !== "claimed") {
         if (claimResult.status === "cached") {
-          const cached = claimResult.request;
-          const cachedRun = await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, cached.runId);
-          if ((providedRunId && providedRunId !== cached.runId) || !isBoundRun(cachedRun, cached.runId, subjectFor(actorUserId))) {
-            return NextResponse.json({ error: "Graph run identity mismatch" }, { status: 409 });
-          }
-          await container.graphRunRepository.markRunCompleted(
-            SYSTEM_ACTOR,
-            cached.runId,
-            cached.ok ? "success" : "error",
-            cached.ok ? undefined : "Graph execution failed",
-            cached.ok ? undefined : (cached.errorCode ?? "internal")
-          );
-          return NextResponse.json(
-            cached.ok
-              ? { ok: true, runId: cached.runId, traceId: cached.traceId }
-              : {
-                  ok: false,
-                  runId: cached.runId,
-                  traceId: cached.traceId,
-                  error: cached.errorCode ?? "internal",
-                },
-            { status: 200 }
-          );
+          return replayTerminal(claimResult.request);
         }
         if (claimResult.status === "mismatch") {
           return NextResponse.json(
