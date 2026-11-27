@@ -443,18 +443,21 @@ export async function completionStream(
     serverEnv().AUTH_SECRET
   );
 
+  // The canonical worker delivers API executions under api:{runId}. Keep
+  // scoped workflow/run derivation, but reserve exactly the claim it executes.
+  const executionKey = `api:${runId}`;
   // Claim the global execution_requests slot before Temporal starts. Recheck
   // after INSERT so concurrent different-payload callers cannot both proceed.
   const executionRequests = getContainer().executionRequestPort;
   let idempotency = await executionRequests.checkIdempotency(
-    idempotencyKey,
+    executionKey,
     requestHash
   );
   if (idempotency.status === "new") {
     let createError: unknown;
     try {
       await executionRequests.createPendingRequest(
-        idempotencyKey,
+        executionKey,
         requestHash,
         runId,
         ctx.traceId
@@ -463,7 +466,7 @@ export async function completionStream(
       createError = error;
     }
     idempotency = await executionRequests.checkIdempotency(
-      idempotencyKey,
+      executionKey,
       requestHash
     );
     if (idempotency.status === "new") {

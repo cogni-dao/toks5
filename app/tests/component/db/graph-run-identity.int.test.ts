@@ -25,7 +25,7 @@ import {
 } from "@cogni/db-schema";
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const owner = randomUUID();
@@ -230,14 +230,27 @@ describe("canonical graph run creation (real PostgreSQL)", () => {
     expect(rows.map((row) => row.runId)).toEqual([runId]);
   });
 
+  it("atomically hands one unleased facade reservation to one worker", async () => {
+    const requests = new DrizzleExecutionRequestAdapter(db());
+    const runId = nextRun();
+    const key = `api:${runId}`;
+    keys.push(key);
+    await requests.createPendingRequest(key, "facade-hash", runId, "facade-trace");
+    const claims = await Promise.all(Array.from({ length: 8 }, () => requests.createPendingRequest(
+      key, "facade-hash", runId, "worker-trace", new Date(Date.now() + 60_000).toISOString()
+    )));
+    expect(claims.filter((claim) => claim.status === "claimed")).toHaveLength(1);
+    await requests.finalizeRequest(key, { ok: true, errorCode: null });
+    expect(await requests.checkIdempotency(key, "facade-hash")).toMatchObject({ status: "cached", request: { runId, ok: true } });
+    expect(await requests.checkIdempotency(key, "different-payload")).toMatchObject({ status: "mismatch" });
+  });
+
   it("persists the admitted start and paginates completed optional runs", async () => {
     const older = nextRun();
     const current = nextRun();
     await runs().createRun(SYSTEM_ACTOR, { ...facts(older), requestedBy: historyOwner });
     await runs().markRunStarted(SYSTEM_ACTOR, older);
     await runs().markRunCompleted(SYSTEM_ACTOR, older, "success");
-    // The cursor is timestamp-based, so the two real starts must differ.
-    await new Promise((resolve) => setTimeout(resolve, 10));
 
     await runs().createRun(SYSTEM_ACTOR, { ...facts(current), requestedBy: historyOwner });
     expect(await runs().getRunByRunId(SYSTEM_ACTOR, current)).toMatchObject({ status: "pending", startedAt: null });
@@ -247,10 +260,31 @@ describe("canonical graph run creation (real PostgreSQL)", () => {
     await runs().markRunCompleted(SYSTEM_ACTOR, current, "success");
     await runs().markRunStarted(SYSTEM_ACTOR, current, "retry");
     expect(await runs().getRunByRunId(SYSTEM_ACTOR, current)).toMatchObject({ status: "success", startedAt: running?.startedAt, langfuseTraceId: "trace", completedAt: expect.any(Date) });
-    const page = await runs().listRunsByUser(SYSTEM_ACTOR, historyOwner, { limit: 1 });
-    expect(page[0]?.runId).toBe(current);
-    expect(page[0]?.startedAt).toBeInstanceOf(Date);
-    const next = await runs().listRunsByUser(SYSTEM_ACTOR, historyOwner, { limit: 1, cursor: page[0]?.startedAt?.toISOString() });
-    expect(next.map((run) => run.runId)).toContain(older);
+    // Force the collision instead of excluding it with a sleep. Include
+    // PostgreSQL precision that JS Date cannot represent independently.
+    await db().update(graphRuns).set({ startedAt: sql`'2026-11-27T12:00:00.123456Z'::timestamptz` })
+      .where(inArray(graphRuns.runId, [older, current]));
+    const pending = nextRun();
+    const skipped = nextRun();
+    await runs().createRun(SYSTEM_ACTOR, { ...facts(pending), requestedBy: historyOwner });
+    await runs().createRun(SYSTEM_ACTOR, { ...facts(skipped), requestedBy: historyOwner });
+    await runs().markRunCompleted(SYSTEM_ACTOR, skipped, "skipped");
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    // Fixed budget also catches a cursor that loops or terminates early.
+    for (let page = 0; page < 4; page++) {
+      const rows = await runs().listRunsByUser(SYSTEM_ACTOR, historyOwner, { limit: 1, ...(cursor ? { cursor } : {}) });
+      const row = rows[0];
+      expect(row).toBeDefined();
+      if (!row) throw new Error("History ended early");
+      seen.push(row.runId);
+      expect(rows.length).toBe(page === 3 ? 1 : 2);
+      expect(row.startedAt === null).toBe(page >= 2);
+      cursor = `v1|${row.startedAt?.toISOString() ?? "null"}|${row.id}`;
+    }
+    expect(new Set(seen)).toEqual(new Set([older, current, pending, skipped]));
+    expect(await runs().listRunsByUser(SYSTEM_ACTOR, historyOwner, { limit: 1, ...(cursor ? { cursor } : {}) })).toEqual([]);
+    const legacy = await runs().listRunsByUser(SYSTEM_ACTOR, historyOwner, { cursor: "2026-11-27T12:00:00.124Z" });
+    expect(legacy).toHaveLength(4);
   });
 });

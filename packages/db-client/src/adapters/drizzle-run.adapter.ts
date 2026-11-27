@@ -23,7 +23,7 @@ import type {
   GraphRunRepository,
   GraphRunStatus,
 } from "@cogni/scheduler-core";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Database, LoggerLike } from "../client";
 import { withTenantScope } from "../tenant-scope";
 
@@ -238,7 +238,7 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
       // security boundary (user sees own runs + schedule-owned runs), but this
       // WHERE clause ensures user-scope queries don't return system runs and
       // system-scope queries don't return user runs. Defense-in-depth.
-      const conditions: ReturnType<typeof eq>[] = [
+      const conditions: (ReturnType<typeof eq> | undefined)[] = [
         eq(graphRuns.requestedBy, userId),
       ];
 
@@ -248,15 +248,32 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
       if (opts?.runKind) {
         conditions.push(eq(graphRuns.runKind, opts.runKind));
       }
+      // JS Date exposes millisecond precision. Use the same precision in SQL
+      // ordering and comparisons, including historical sub-millisecond starts.
+      const startedAt = sql`date_trunc('milliseconds', ${graphRuns.startedAt})`;
       if (opts?.cursor) {
-        conditions.push(lt(graphRuns.startedAt, new Date(opts.cursor)));
+        if (opts.cursor.startsWith("v1|")) {
+          const [, timestamp, id] = opts.cursor.split("|");
+          if (!id || !timestamp || (timestamp !== "null" && Number.isNaN(Date.parse(timestamp)))) {
+            throw new Error("Invalid run history cursor");
+          }
+          conditions.push(timestamp === "null"
+            ? and(isNull(graphRuns.startedAt), lt(graphRuns.id, id))
+            : or(
+                lt(startedAt, new Date(timestamp)),
+                and(eq(startedAt, new Date(timestamp)), lt(graphRuns.id, id)),
+                isNull(graphRuns.startedAt)
+              ));
+        } else {
+          conditions.push(or(lt(startedAt, new Date(opts.cursor)), isNull(graphRuns.startedAt)));
+        }
       }
 
       const rows = await tx
         .select()
         .from(graphRuns)
         .where(and(...conditions))
-        .orderBy(desc(graphRuns.startedAt))
+        .orderBy(sql`${startedAt} DESC NULLS LAST`, desc(graphRuns.id))
         .limit(pageSize + 1); // fetch one extra to detect next page
 
       return rows.map((row) => this.toRun(row));

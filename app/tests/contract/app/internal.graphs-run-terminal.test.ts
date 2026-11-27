@@ -11,6 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { toUserId } from "@cogni/ids";
 import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,8 @@ const BILLING_ID = "20000000-0000-4000-a000-000000000001";
 const VIRTUAL_KEY_ID = "30000000-0000-4000-a000-000000000001";
 
 const mocks = vi.hoisted(() => ({
+  listRunsByUser: vi.fn(),
+  workflowStart: vi.fn().mockResolvedValue(undefined),
   runGraph: vi.fn(),
   setupFailure: false,
   scopedSignal: undefined as AbortSignal | undefined,
@@ -69,7 +72,7 @@ vi.mock("@/bootstrap/http", () => ({
 }));
 
 vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({ SCHEDULER_API_TOKEN: "scheduler-secret-value-1234567890" }),
+  serverEnv: () => ({ SCHEDULER_API_TOKEN: "scheduler-secret-value-1234567890", AUTH_SECRET: "test-secret-at-least-thirty-two-characters" }),
 }));
 
 vi.mock("@/bootstrap/graph-executor.factory", () => {
@@ -98,7 +101,13 @@ vi.mock("@/bootstrap/graph-executor.factory", () => {
   };
 });
 
+vi.mock("@/shared/config", () => ({ getNodeId: () => "toks5" }));
+vi.mock("@/lib/auth/mapping", () => ({
+  getOrCreateBillingAccountForUser: async () => ({ id: BILLING_ID, defaultVirtualKeyId: VIRTUAL_KEY_ID }),
+}));
 vi.mock("@/bootstrap/container", () => ({
+  getTemporalWorkflowClient: async () => ({ client: { start: mocks.workflowStart }, taskQueue: "test" }),
+  resolveAiAdapterDeps: () => ({ accountService: {} }),
   getContainer: () => ({
     executionRequestPort: {
       checkIdempotency: mocks.checkIdempotency,
@@ -107,18 +116,22 @@ vi.mock("@/bootstrap/container", () => ({
       finalizeRequest: mocks.finalizeRequest,
     },
     graphRunRepository: {
+      listRunsByUser: mocks.listRunsByUser,
       markRunStarted: mocks.markRunStarted,
       markRunCompleted: mocks.markRunCompleted,
       patchRunStateKey: mocks.patchRunStateKey,
       getRunByRunId: mocks.getRunByRunId,
       createRun: mocks.createRun,
     },
+    agentAuthority: { payerFor: async () => null },
+    log: { info: vi.fn() },
     accountsForUser: () => ({}),
     executionGrantWorkerPort: { validateGrantForGraph: mocks.validateGrant },
     serviceAccountService: { getBillingAccountById: mocks.billingAccount },
     providerResolver: {},
     connectionBroker: undefined,
     runStream: {
+      subscribe: async function* () { yield { event: { type: "done" } }; },
       publish: mocks.publish,
       expire: vi.fn().mockResolvedValue(undefined),
     },
@@ -138,6 +151,9 @@ vi.mock("@/app/_facades/work/items.server", () => ({
 }));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
 
+import { GET as listRuns } from "@/app/api/v1/ai/runs/route";
+import { completionStream } from "@/app/_facades/ai/completion.server";
+import { makeNoopLogger } from "@/shared/observability";
 import { POST } from "@/app/api/internal/graphs/[graphId]/runs/route";
 import { POST as createRun } from "@/app/api/internal/graph-runs/route";
 import { DELETE as deleteItem } from "@/app/api/v1/work/items/[id]/route";
@@ -161,6 +177,10 @@ function create(body: unknown) {
 describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.finalizeRequest.mockReset().mockResolvedValue(undefined);
+    mocks.publish.mockReset().mockImplementation(async (_runId: string, event: { type: string }) => {
+      if (event.type === "done") throw new Error("redis unavailable");
+    });
     mocks.setupFailure = false;
     mocks.scopedSignal = undefined;
     mocks.scopedRunKind = undefined;
@@ -169,7 +189,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN });
     mocks.createRun.mockReset().mockImplementation(async (_actor, facts) => ({ ...BASE_RUN, ...facts }));
     mocks.validateGrant.mockReset().mockResolvedValue({ userId: USER_ID, billingAccountId: BILLING_ID });
-    mocks.createPendingRequest.mockResolvedValue({ status: "claimed", request: { runId: RUN_ID } });
+    mocks.createPendingRequest.mockReset().mockResolvedValue({ status: "claimed", request: { runId: RUN_ID } });
   });
 
   const profiles = [
@@ -333,9 +353,68 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
   it("hands a bound unleased API facade preclaim to execution", async () => {
     mocks.checkIdempotency.mockResolvedValue({ status: "pending", request: { runId: RUN_ID, ok: null, leaseExpiresAt: null } });
     expect((await invoke({ runId: RUN_ID, input: { ...BASE_INPUT, executionRequestHash: "a".repeat(64) } })).status).toBe(200);
-    expect(mocks.heartbeatRequest).toHaveBeenCalled();
-    expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+    expect(mocks.createPendingRequest).toHaveBeenCalledWith("api:test", "a".repeat(64), RUN_ID, expect.any(String), expect.any(String));
     expect(mocks.runGraph).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("finalizes the actual completion facade reservation through worker handoff: %s", async (success) => {
+    type Claim = { runId: string; requestHash: string; ok: boolean | null; leaseExpiresAt: string | null; traceId: string | null; errorCode?: string };
+    const claims = new Map<string, Claim>();
+    mocks.checkIdempotency.mockImplementation(async (key: string, hash: string) => {
+      const request = claims.get(key);
+      return !request ? { status: "new" } : request.requestHash !== hash
+        ? { status: "mismatch", existingHash: request.requestHash, providedHash: hash }
+        : { status: request.ok !== null ? "cached" : "pending", request };
+    });
+    mocks.createPendingRequest.mockImplementation(async (key: string, hash: string, runId: string, traceId: string, lease?: string) => {
+      const claim = claims.get(key);
+      if (claim?.leaseExpiresAt) return { status: "pending", request: claim };
+      const request = { runId, requestHash: hash, traceId, ok: null, leaseExpiresAt: lease ?? null };
+      claims.set(key, request);
+      return { status: "claimed", request };
+    });
+    mocks.finalizeRequest.mockImplementation(async (key: string, outcome: { ok: boolean }) => {
+      const claim = claims.get(key);
+      if (!claim) throw new Error("Finalizing an unreserved claim");
+      Object.assign(claim, outcome);
+    });
+    mocks.publish.mockResolvedValue(undefined);
+    const completion = await completionStream({
+      messages: BASE_INPUT.messages as [{ role: "user"; content: string }], modelRef: BASE_INPUT.modelRef,
+      sessionUser: { id: toUserId(USER_ID), walletAddress: null, displayName: null, avatarColor: null }, graphName: "langgraph:default", acceptanceMode: "workflow-start",
+    }, { reqId: "facade-request", traceId: "trace", routeId: "test", log: makeNoopLogger(), clock: { now: () => new Date().toISOString() } });
+    // Consume the actual facade's subscription so it cleans up.
+    for await (const _event of completion.stream) { /* fixture stream */ }
+    const workflow = mocks.workflowStart.mock.calls.at(-1)?.[1].args[0];
+    expect(workflow.runId).toBe(completion.runId);
+    // Canonical GraphRunWorkflow creates these facts before executeGraphActivity.
+    const creation = await create({ runId: workflow.runId, graphId: workflow.graphId, runKind: workflow.runKind,
+      triggerSource: workflow.triggerSource, triggerRef: workflow.triggerRef, requestedBy: workflow.requestedBy });
+    expect(creation.status).toBe(200);
+    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, runId: workflow.runId, triggerRef: workflow.triggerRef });
+    if (!success) mocks.setupFailure = true;
+    const response = await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:default/runs", {
+      method: "POST", headers: { authorization: "Bearer scheduler-secret-value-1234567890", "idempotency-key": `api:${workflow.runId}` },
+      body: JSON.stringify({ executionGrantId: workflow.executionGrantId, input: workflow.input, runId: workflow.runId }),
+    }), { params: Promise.resolve({ graphId: "langgraph:default" }) });
+    expect(response.status).toBe(200);
+    expect(claims.size).toBe(1);
+    expect(claims.get(`api:${workflow.runId}`)).toMatchObject({ runId: workflow.runId, ok: success });
+    expect(mocks.finalizeRequest).toHaveBeenCalledWith(`api:${workflow.runId}`, expect.objectContaining({ ok: success }));
+  });
+
+  it.each([null, new Date("2026-11-27T12:00:00.123Z")])("emits and accepts composite history cursors for %s", async (startedAt) => {
+    const row = { ...BASE_RUN, id: RUN_ID, startedAt, completedAt: null, status: "pending", errorCode: null, errorMessage: null };
+    mocks.listRunsByUser.mockResolvedValue([row, { ...row, id: OTHER_RUN_ID }]);
+    const first = await listRuns(new NextRequest("http://localhost/api/v1/ai/runs?limit=1"));
+    expect(first.status).toBe(200);
+    const body = await first.json();
+    const cursor = `v1|${startedAt?.toISOString() ?? "null"}|${RUN_ID}`;
+    expect(body.nextCursor).toBe(cursor);
+    mocks.listRunsByUser.mockResolvedValue([]);
+    expect((await listRuns(new NextRequest(`http://localhost/api/v1/ai/runs?limit=1&cursor=${encodeURIComponent(cursor)}`))).status).toBe(200);
+    expect(mocks.listRunsByUser).toHaveBeenLastCalledWith(expect.anything(), USER_ID, { limit: 1, cursor });
+    expect((await listRuns(new NextRequest("http://localhost/api/v1/ai/runs?cursor=invalid"))).status).toBe(400);
   });
 
   it("authenticates before reading or replaying a completed request", async () => {
@@ -424,6 +503,13 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     expect(mocks.createPendingRequest.mock.invocationCallOrder[0]).toBeLessThan(mocks.createRun.mock.invocationCallOrder[0] as number);
     expect(mocks.createRun.mock.invocationCallOrder[0]).toBeLessThan(mocks.markRunStarted.mock.invocationCallOrder[0] as number);
     expect(mocks.markRunStarted.mock.invocationCallOrder[0]).toBeLessThan(mocks.runGraph.mock.invocationCallOrder[0] as number);
+  });
+
+  it("retains system ownership for optional API history", async () => {
+    mocks.getRunByRunId.mockResolvedValue(null);
+    mocks.publish.mockResolvedValue(undefined);
+    expect((await invoke({ input: { ...BASE_INPUT, actorUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID } })).status).toBe(200);
+    expect(mocks.createRun).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ requestedBy: COGNI_SYSTEM_PRINCIPAL_USER_ID }));
   });
 
   it.each([undefined, {}, { providerKey: "platform" }])("validates optional-run model before any insertion: %s", async (modelRef) => {

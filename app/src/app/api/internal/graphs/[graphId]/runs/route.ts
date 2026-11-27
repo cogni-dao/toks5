@@ -514,14 +514,13 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       return NextResponse.json({ error: "Graph run facts missing or mismatched" }, { status: 409 });
     }
 
-    let requestAlreadyClaimed = false;
     if (idempotencyResult.status === "pending") {
       // Execution in progress - return 409 Conflict to signal retry later
       const pending = idempotencyResult.request;
       if (suppliedRequestHash && pending.runId === runId && pending.leaseExpiresAt === null) {
         // The completion facade durably claimed this exact request before
         // starting Temporal. This workflow owns the pending record.
-        requestAlreadyClaimed = true;
+        // Atomically acquire its first execution lease below.
       } else {
         log.info(
           { idempotencyKey, runId: pending.runId },
@@ -567,12 +566,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 
     // Claim only after permanent request validation. INSERT races are resolved
     // by ON CONFLICT + re-read; expired pending leases are reclaimed atomically.
-    if (requestAlreadyClaimed) {
-      await container.executionRequestPort.heartbeatRequest(
-        idempotencyKey,
-        new Date(Date.now() + EXECUTION_LEASE_MS).toISOString()
-      );
-    } else {
+    {
       const claimResult =
         await container.executionRequestPort.createPendingRequest(
           idempotencyKey,
@@ -649,7 +643,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         ? await container.graphRunRepository.createRun(SYSTEM_ACTOR, {
             runId, graphId, runKind: "user_immediate", triggerSource: "api",
             triggerRef: idempotencyKey,
-            ...(subjectFor(actorUserId) ? { requestedBy: actorUserId } : {}),
+            requestedBy: actorUserId,
             ...(stateKey ? { stateKey } : {}),
           })
         : null);

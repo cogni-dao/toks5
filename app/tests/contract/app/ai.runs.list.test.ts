@@ -138,7 +138,7 @@ describe("GET /api/v1/ai/runs", () => {
         startedAt: new Date("2026-03-19T10:00:00Z"),
       }),
       makeRun({
-        id: "pk-2",
+        id: "a0000000-0000-4000-a000-000000000002",
         runId: "r-2",
         startedAt: new Date("2026-03-19T09:00:00Z"),
       }),
@@ -158,7 +158,7 @@ describe("GET /api/v1/ai/runs", () => {
         expect(res.status).toBe(200);
         const body = await res.json();
         expect(body.runs).toHaveLength(2);
-        expect(body.nextCursor).toBe("2026-03-19T09:00:00.000Z");
+        expect(body.nextCursor).toBe("v1|2026-03-19T09:00:00.000Z|a0000000-0000-4000-a000-000000000002");
       },
     });
   });
