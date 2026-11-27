@@ -22,6 +22,7 @@ const VIRTUAL_KEY_ID = "30000000-0000-4000-a000-000000000001";
 
 const mocks = vi.hoisted(() => ({
   runGraph: vi.fn(),
+  setupFailure: false,
   scopedSignal: undefined as AbortSignal | undefined,
   scopedRunKind: undefined as string | undefined,
   patchRunStateKey: vi.fn().mockResolvedValue(undefined),
@@ -88,6 +89,7 @@ vi.mock("@/bootstrap/graph-executor.factory", () => {
   return {
     createGraphExecutor: () => executor,
     createScopedGraphExecutor: (params: { abortSignal?: AbortSignal; runKind?: string }) => {
+      if (mocks.setupFailure) throw new Error("executor setup failed");
       mocks.scopedSignal = params.abortSignal;
       mocks.scopedRunKind = params.runKind;
       return executor;
@@ -157,6 +159,7 @@ function create(body: unknown) {
 describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.setupFailure = false;
     mocks.scopedSignal = undefined;
     mocks.scopedRunKind = undefined;
     mocks.checkIdempotency.mockReset().mockResolvedValue({ status: "new" });
@@ -414,7 +417,79 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     expect(facts).toMatchObject({ graphId: "langgraph:default", runKind: "user_immediate", triggerSource: "api", triggerRef: "api:test", requestedBy: USER_ID });
     expect(facts.runId).toMatch(/^[0-9a-f-]{36}$/);
     expect(mocks.runGraph).toHaveBeenCalledWith(expect.objectContaining({ runId: facts.runId }), expect.anything());
+    expect(mocks.createPendingRequest.mock.invocationCallOrder[0]).toBeLessThan(mocks.createRun.mock.invocationCallOrder[0] as number);
     expect(mocks.createRun.mock.invocationCallOrder[0]).toBeLessThan(mocks.runGraph.mock.invocationCallOrder[0] as number);
+  });
+
+  it.each([undefined, {}, { providerKey: "platform" }])("validates optional-run model before any insertion: %s", async (modelRef) => {
+    const response = await invoke({ input: { ...BASE_INPUT, modelRef } });
+    expect(response.status).toBe(400);
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.createPendingRequest).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending", "mismatch", "cached"])("creates no optional-run orphan when losing the claim: %s", async (status) => {
+    mocks.getRunByRunId.mockImplementation(async (_actor, runId) => runId === RUN_ID ? { ...BASE_RUN } : null);
+    mocks.createPendingRequest.mockResolvedValueOnce({ status, request: { runId: RUN_ID, ok: true, traceId: "original" } });
+    const response = await invoke({ input: BASE_INPUT });
+    expect(response.status).toBe(status === "pending" ? 409 : status === "mismatch" ? 422 : 200);
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("creates the canonical claimed run after a crash before optional-run insertion", async () => {
+    let durable: typeof BASE_RUN | null = null;
+    mocks.checkIdempotency.mockResolvedValue({ status: "stale", request: { runId: RUN_ID } });
+    mocks.getRunByRunId.mockImplementation(async () => durable);
+    mocks.createRun.mockImplementation(async (_actor, facts) => { durable = { ...BASE_RUN, ...facts }; return durable; });
+    expect((await invoke({ input: BASE_INPUT })).status).toBe(200);
+    expect(mocks.createRun).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ runId: RUN_ID }));
+    expect(mocks.runGraph).toHaveBeenCalledWith(expect.objectContaining({ runId: RUN_ID }), expect.anything());
+  });
+
+  it("finalizes optional-run insertion when executor setup throws", async () => {
+    let durable: typeof BASE_RUN | null = null;
+    mocks.getRunByRunId.mockImplementation(async () => durable);
+    mocks.createPendingRequest.mockImplementationOnce(async (_key, _hash, runId) => ({ status: "claimed", request: { runId } }));
+    mocks.createRun.mockImplementation(async (_actor, facts) => { durable = { ...BASE_RUN, ...facts }; return durable; });
+    mocks.setupFailure = true;
+    const response = await invoke({ input: BASE_INPUT });
+    expect(await response.json()).toMatchObject({ ok: false, error: "internal" });
+    expect(mocks.finalizeRequest).toHaveBeenCalledWith("api:test", { ok: false, errorCode: "internal" });
+    expect(mocks.markRunCompleted).toHaveBeenCalledWith(expect.anything(), expect.any(String), "error", "Graph execution failed", "internal");
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("leaves a failed optional-run insert reclaimable instead of caching a result without a ledger", async () => {
+    mocks.getRunByRunId.mockResolvedValue(null);
+    mocks.createRun.mockRejectedValueOnce(new Error("insert rolled back"));
+    expect((await invoke({ input: BASE_INPUT })).status).toBe(503);
+    expect(mocks.finalizeRequest).not.toHaveBeenCalled();
+    expect(mocks.markRunCompleted).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a committed optional-run insert after losing its commit response", async () => {
+    let durable: typeof BASE_RUN | null = null;
+    mocks.getRunByRunId.mockImplementation(async () => durable);
+    mocks.createRun.mockImplementationOnce(async (_actor, facts) => {
+      durable = { ...BASE_RUN, ...facts };
+      throw new Error("commit response lost");
+    });
+    expect(await (await invoke({ input: BASE_INPUT })).json()).toMatchObject({ ok: false, error: "internal" });
+    expect(mocks.finalizeRequest).toHaveBeenCalledWith("api:test", { ok: false, errorCode: "internal" });
+    expect(mocks.markRunCompleted).toHaveBeenCalledWith(expect.anything(), RUN_ID, "error", "Graph execution failed", "internal");
+    expect(mocks.runGraph).not.toHaveBeenCalled();
+  });
+
+  it("retains known success if ledger reconciliation fails after finalization", async () => {
+    await mocks.publish.withImplementation(async () => undefined, async () => {
+      mocks.markRunCompleted.mockRejectedValueOnce(new Error("transient ledger outage"));
+      expect(await (await invoke()).json()).toMatchObject({ ok: true, runId: RUN_ID });
+      expect(mocks.finalizeRequest.mock.calls.every((call) => call[1].ok === true)).toBe(true);
+      expect(mocks.markRunCompleted.mock.calls.every((call) => call[2] === "success")).toBe(true);
+    });
   });
 
   it("keeps omitted-run retries bound to their existing durable row", async () => {
@@ -478,14 +553,12 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
 
   it.each(["runId", "graphId", "runKind", "requestedBy", "triggerSource", "triggerRef", "scheduleId", "scheduledFor"])("refuses idempotent create with conflicting %s", async (field) => {
     const different = field === "scheduledFor" ? new Date("2026-01-01") : field === "runId" ? OTHER_RUN_ID : "other";
-    mocks.createRun.mockRejectedValue(new Error("duplicate run"));
-    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, [field]: different });
+    mocks.createRun.mockResolvedValue({ ...BASE_RUN, [field]: different });
     expect((await create({ runId: RUN_ID, graphId: BASE_RUN.graphId, runKind: BASE_RUN.runKind, triggerSource: BASE_RUN.triggerSource, triggerRef: BASE_RUN.triggerRef, requestedBy: USER_ID })).status).toBe(409);
   });
 
   it("accepts an exact idempotent create even after stateKey has been patched", async () => {
-    mocks.createRun.mockRejectedValue(new Error("duplicate run"));
-    mocks.getRunByRunId.mockResolvedValue({ ...BASE_RUN, stateKey: "host-derived-thread" });
+    mocks.createRun.mockResolvedValue({ ...BASE_RUN, stateKey: "host-derived-thread" });
     expect((await create({ runId: RUN_ID, graphId: BASE_RUN.graphId, runKind: BASE_RUN.runKind, triggerSource: BASE_RUN.triggerSource, triggerRef: BASE_RUN.triggerRef, requestedBy: USER_ID })).status).toBe(200);
   });
 

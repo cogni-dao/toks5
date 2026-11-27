@@ -32,7 +32,10 @@ export interface GraphRunRepository {
   /**
    * Creates a run record. Status defaults to 'pending'.
    * For scheduled runs: scheduleId + scheduledFor provide slot uniqueness.
-   * For API/webhook runs: scheduleId is null.
+   * Returns the existing canonical row for a repeated runId, without resetting
+   * its facts or status. Concurrent creators must converge atomically.
+   * For API/webhook runs: scheduleId is null. Historical duplicate runIds fail
+   * closed; creation never rewrites or deletes history.
    * @param actorId - Actor performing the operation (for RLS SET LOCAL / audit trail)
    */
   createRun: (
